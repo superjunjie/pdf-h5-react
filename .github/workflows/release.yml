@@ -1,14 +1,23 @@
 name: Release
 
-# 发布到 npmjs.com（公共源）。
+# 通过 Trusted Publishing (OIDC) 发布到 npmjs.com。
 #
-# 触发方式（二选一）：
-#   1) 推送形如 v0.3.0 的 tag —— 版本号必须与 package.json 一致，CI 会校验；
-#   2) 在 Actions 页面手动 Run workflow（可用输入框覆盖版本号）。
+# 这条链路不需要任何 Secret：
+#   - GitHub Actions 每次运行时签发一个短期 OIDC token
+#   - npm 校验该 token 是否匹配包的 trusted publisher 配置（仓库 + workflow 文件名）
+#   - 校验通过即允许 npm publish，无需 NPM_TOKEN，也无需 OTP
 #
-# 前置条件：仓库 Settings → Secrets 里配置 NPM_TOKEN
-#   （npmjs.com 的 Automation token，权限只需 Read and write）。
-# 注意：GitHub 自带的 GITHUB_TOKEN 只能发 GitHub Packages，发不了 npmjs。
+# 一次性配置（在 npmjs.com 网页上完成，需要账号已启用 2FA）：
+#   包页面 → Settings → Trusted publishing → Add a trusted publisher
+#     Provider   : GitHub Actions
+#     Repository : superjunjie/pdf-h5-react
+#     Workflow   : release.yml
+#     Environment: (留空)
+#   或等价的 CLI：npm trust github pdf-h5-react --file release.yml --repo superjunjie/pdf-h5-react --allow-publish -y
+#
+# 触发方式：
+#   1) 推送形如 v0.3.1 的 tag —— 版本号必须与 package.json 一致，CI 会校验
+#   2) 在 Actions 页面手动 Run workflow（可用输入框覆盖版本号）
 on:
   push:
     tags:
@@ -26,20 +35,32 @@ concurrency:
 
 jobs:
   publish:
-    name: Build & Publish
+    name: Build & Publish (OIDC)
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # 关键：id-token: write 让 Actions 能签发 OIDC token，npm 靠它做身份校验
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 注意：使用 OIDC 时不要配置任何 registry auth token。
+      # 这里只设置 registry 地址，Node 24+ / npm 11+ 会自动走 trusted publishing。
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # trusted publishing 要求 Node >= 22.14.0
+          node-version: '22.14.0'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
+
+      # npm 11.5.1+ 才支持 OIDC 发布，锁定版本避免 runner 自带的旧 npm 不支持
+      - name: Ensure modern npm
+        run: |
+          npm install -g npm@latest
+          npm --version
+          node --version
 
       - name: Install dependencies
         run: |
@@ -83,17 +104,22 @@ jobs:
             echo "✓ $f ($(du -h "$f" | cut -f1))"
           done
 
-      - name: Publish to npmjs
+      # 使用 OIDC 时不要设置 NODE_AUTH_TOKEN：一旦存在 token，npm 会走 token 认证
+      # 而不是 trusted publishing，反而可能因权限不足失败。
+      - name: Publish to npmjs (trusted publishing)
         run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Summary
         run: |
-          echo "### 已发布到 npmjs" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "$(node -p "'pdf-h5-react@' + require('./package.json').version")" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "安装：\`npm i pdf-h5-react\`" >> "$GITHUB_STEP_SUMMARY"
+          VERSION="$(node -p "require('./package.json').version")"
+          {
+            echo "### 已发布到 npmjs（OIDC 信任发布）"
+            echo ""
+            echo '```'
+            echo "pdf-h5-react@$VERSION"
+            echo '```'
+            echo ""
+            echo "安装：\`npm i pdf-h5-react@$VERSION\`"
+            echo ""
+            echo "https://www.npmjs.com/package/pdf-h5-react/v/$VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"
