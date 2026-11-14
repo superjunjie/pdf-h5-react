@@ -45,19 +45,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4.2.2
 
-      # 注意：使用 OIDC 时不要配置任何 registry auth token。
-      # 这里只设置 registry 地址；发布时 npm 会自动用 GitHub 的 OIDC token 换取短期凭据。
+      # 关键：这里**不能**设 registry-url。
       #
-      # 用 Node 24：它自带 npm 11.x，满足 trusted publishing 的 npm >= 11.5.1 要求。
-      # 之前用 Node 22.14.0 + `npm install -g npm@latest`，那一步在 runner 上
-      # 会直接失败（权限/路径问题），导致后续全部跳过。直接用自带新版 npm 的
-      # Node 更稳，也少一个失败点。
+      # setup-node 的 registry-url 会在 ~/.npmrc 写一行
+      #   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+      # 未提供 token 时它展开成空字符串，但 npm 只要看到 _authToken 这一行存在，
+      # 就认为「认证已配置」，于是跳过 OIDC 交换，导致 trusted publishing 静默失效
+      # （表现为 ENEEDAUTH 或 404 Not Found - PUT）。
+      # registry.npmjs.org 本就是默认源，所以这个参数没有收益，只有风险。
       - name: Setup Node
         uses: actions/setup-node@v4.4.0
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
+
+      # 兜底：清掉可能存在的 _authToken 行，确保 npm 会走 OIDC 交换
+      - name: Strip auth token from npmrc (force OIDC path)
+        run: |
+          for f in "$HOME/.npmrc" "$(pwd)/.npmrc"; do
+            if [ -f "$f" ] && grep -q '_authToken' "$f"; then
+              echo "清理 $f 中的 _authToken 行"
+              grep -v '_authToken' "$f" > "$f.tmp" || true
+              mv "$f.tmp" "$f"
+            fi
+          done
+          echo "--- 当前 .npmrc（预期无 _authToken）---"
+          cat "$HOME/.npmrc" 2>/dev/null || echo "(empty)"
 
       # 兜底校验：npm 版本必须 >= 11.5.1，否则 OIDC 发布不可用，提前失败给出清晰原因
       - name: Verify npm supports trusted publishing
@@ -120,14 +133,30 @@ jobs:
       # 后者确保首次发布会创建公开包。明确写出来，避免依赖隐式行为。
       - name: Publish to npmjs (trusted publishing)
         run: |
+          set -o pipefail
           echo "=== 发布前诊断 ==="
           echo "npm: $(npm --version) / node: $(node --version)"
           echo "package: $(node -p "require('./package.json').name + '@' + require('./package.json').version")"
-          echo "registry: $(npm config get registry)"
-          echo "NODE_AUTH_TOKEN set: ${{ secrets.NPM_TOKEN != '' }}"
-          echo "ACTIONS_ID_TOKEN_REQUEST_URL present: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL != '' }}"
-          echo "=================="
-          npm publish --verbose --access public
+          echo "--- npmrc（预期无 _authToken）---"
+          cat "$HOME/.npmrc" 2>/dev/null || echo "(none)"
+          echo "=================================="
+          # 显式指定 registry：因为没有设 setup-node 的 registry-url，
+          # 这里确保发布目标就是 npmjs 官方源。
+          # --provenance 会随 OIDC 自动附加来源证明。
+          set +e
+          npm publish --registry=https://registry.npmjs.org --access public 2>&1 | tee /tmp/npm-publish.log
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            {
+              echo "### npm publish 失败（退出码 $STATUS）"
+              echo ""
+              echo '```'
+              tail -40 /tmp/npm-publish.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$STATUS"
+          fi
 
       # 发布后校验：确认 registry 上真的存在这个版本，避免「命令成功但没发出去」
       - name: Verify published to registry
