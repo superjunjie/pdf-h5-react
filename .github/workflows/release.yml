@@ -139,24 +139,39 @@ jobs:
           echo "package: $(node -p "require('./package.json').name + '@' + require('./package.json').version")"
           echo "--- npmrc（预期无 _authToken）---"
           cat "$HOME/.npmrc" 2>/dev/null || echo "(none)"
+          echo "--- OIDC 环境变量（只看是否存在）---"
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then echo "REQUEST_URL: present"; else echo "REQUEST_URL: MISSING"; fi
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then echo "REQUEST_TOKEN: present"; else echo "REQUEST_TOKEN: MISSING"; fi
+          echo "--- 该版本是否已存在 ---"
+          curl -s -o /dev/null -w 'registry 上 %{http_code}\n' "https://registry.npmjs.org/$(node -p "require('./package.json').name")/$(node -p "require('./package.json').version")"
           echo "=================================="
-          # 显式指定 registry：因为没有设 setup-node 的 registry-url，
-          # 这里确保发布目标就是 npmjs 官方源。
-          # --provenance 会随 OIDC 自动附加来源证明。
+
+          # 把完整输出写到文件，并在失败时上传为 artifact（页面日志拿不到时的兜底）
           set +e
-          npm publish --registry=https://registry.npmjs.org --access public 2>&1 | tee /tmp/npm-publish.log
+          npm publish --registry=https://registry.npmjs.org --access public > /tmp/npm-publish.log 2>&1
           STATUS=$?
           set -e
+          cat /tmp/npm-publish.log
           if [ "$STATUS" -ne 0 ]; then
             {
               echo "### npm publish 失败（退出码 $STATUS）"
               echo ""
               echo '```'
-              tail -40 /tmp/npm-publish.log
+              tail -60 /tmp/npm-publish.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit "$STATUS"
           fi
+
+      # 失败兜底：让日志成为可下载 artifact，方便排查（也便于无仓库权限时取证）
+      - name: Upload publish log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-publish-log
+          path: /tmp/npm-publish.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       # 发布后校验：确认 registry 上真的存在这个版本，避免「命令成功但没发出去」
       - name: Verify published to registry
