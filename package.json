@@ -1,6 +1,6 @@
 {
   "name": "pdf-h5-react",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "基于 pdf.js 的移动端优先 React PDF 阅读器组件（连续滚动 / 翻页 / 捏合缩放 / 文本层 / 搜索 / 缩略图 / 目录）",
   "type": "module",
   "license": "MIT",

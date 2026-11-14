@@ -396,11 +396,9 @@ npm run dev         # http://127.0.0.1:5273
 
 ## 发布
 
-发布由 [GitHub Actions](.github/workflows/release.yml) 自动完成，推 tag 即触发。
-
-**前置条件**：仓库 `Settings → Secrets and variables → Actions` 里配置 `NPM_TOKEN`
-（npmjs.com 的 Automation token，权限只需 *Read and write*）。
-GitHub 自带的 `GITHUB_TOKEN` 只能发 GitHub Packages，发不了 npmjs，因此必须配这个 Secret。
+发布由 [GitHub Actions](.github/workflows/release.yml) 通过 **Trusted Publishing (OIDC)** 完成，推 tag 即触发。
+**不需要任何 Secret**：Actions 每次运行签发短期 OIDC token，npm 校验它是否匹配包的
+trusted publisher 配置（仓库 + workflow 文件名），通过即授权发布。
 
 ```bash
 # 1. 改版本号
@@ -417,15 +415,42 @@ node scripts/publish-gh.mjs --tag 0.4.0
 也可以在 [Actions 页面](https://github.com/superjunjie/pdf-h5-react/actions/workflows/release.yml)
 手动触发 `Run workflow`，并用输入框覆盖版本号。
 
-### 手动发布（本地）
+### 一次性配置（已配好，仅供换仓库时参考）
 
-不想等 CI 时可以本地直发，需要先 `npm login`：
+npmjs.com → 包的 **Settings → Trusted publishing** → Add a trusted publisher：
+
+| 字段 | 值 |
+| --- | --- |
+| Provider | GitHub Actions |
+| Organization or user | `superjunjie` |
+| Repository | `pdf-h5-react` |
+| Workflow filename | `release.yml`（**只填文件名**，不含 `.github/workflows/`） |
+| Environment name | 留空（workflow 未使用 environment） |
+| Allowed actions | 勾选 **`npm publish`** |
+
+两个容易踩的坑：
+
+- **`Workflow filename` 只填文件名**，写成 `.github/workflows/release.yml` 会导致 OIDC 换 token 失败。
+- **必须勾 `npm publish`**。2026-09-03 之后新建的配置默认只允许 `npm stage publish`，
+  只勾 stage 的话 OIDC 能通过、但只能暂存，仍需人工批准。
+- 改名仓库或 workflow 文件名后，必须同步更新这里，否则发布会失败。
+
+> **首次发布不能用 OIDC**：npm 要求包已存在于 registry 才能配置 trusted publisher，
+> 而 staged publishing 也不支持全新包。所以新包的第一次发布必须是直接发布
+> （交互式 2FA 或带 bypass-2FA 的 token），之后 OIDC 才可用。
+
+### 手动发布（本地兜底）
+
+CI 不可用时可在本地发，但对新版本通常需要交互式 2FA：
 
 ```bash
-npm run build && npm publish        # prepublishOnly 会自动跑 typecheck + test + build
+npm run build && npm publish    # prepublishOnly 会自动跑 typecheck + test + build
 ```
+
+> npm 正在收紧长期 token：带 bypass-2FA 的 granular token 约 2027-01 失去直接发布能力，
+> 2026-09 起新增的「Read and write (stage only)」token 只能 `npm stage publish`、不能直接发。
+> OIDC 是目前唯一支持无人值守发布的路径。
 
 ## License
 
 MIT
-
