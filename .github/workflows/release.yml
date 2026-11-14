@@ -1,14 +1,14 @@
 name: Release
 
-# 发布到 GitHub Packages。
+# 发布到 npmjs.com（公共源）。
 #
 # 触发方式（二选一）：
-#   1) 推送形如 v0.1.0 的 tag —— 版本号必须与 package.json 一致，CI 会校验；
+#   1) 推送形如 v0.3.0 的 tag —— 版本号必须与 package.json 一致，CI 会校验；
 #   2) 在 Actions 页面手动 Run workflow（可用输入框覆盖版本号）。
 #
-# 鉴权全部使用仓库自带的 GITHUB_TOKEN，不需要配置任何 Secret：
-#   - permissions.packages: write 让它能写入 GitHub Packages
-#   - 同一个仓库内的 workflow 发到本仓库的 Packages 命名空间是允许的
+# 前置条件：仓库 Settings → Secrets 里配置 NPM_TOKEN
+#   （npmjs.com 的 Automation token，权限只需 Read and write）。
+# 注意：GitHub 自带的 GITHUB_TOKEN 只能发 GitHub Packages，发不了 npmjs。
 on:
   push:
     tags:
@@ -20,7 +20,6 @@ on:
         required: false
         type: string
 
-# 同一时间只允许一个发布任务，避免并发推送互相覆盖
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -31,7 +30,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,12 +38,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          registry-url: 'https://npm.pkg.github.com'
-          scope: '@superjunjie'
+          registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
-      # npm ci 需要 lockfile 与 package.json 严格一致；
-      # 若 lockfile 缺失或不同步，退化为 npm install，避免发布被卡死。
       - name: Install dependencies
         run: |
           if [ -f package-lock.json ]; then
@@ -78,7 +73,6 @@ jobs:
       - name: Build library
         run: npm run build
 
-      # 发布前确认产物齐全：缺 index.js / d.ts / css 时不要污染 registry
       - name: Check dist artifacts
         run: |
           for f in dist/index.js dist/index.d.ts dist/pdf-h5-react.css; do
@@ -89,17 +83,17 @@ jobs:
             echo "✓ $f ($(du -h "$f" | cut -f1))"
           done
 
-      - name: Publish to GitHub Packages
+      - name: Publish to npmjs
         run: npm publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Summary
         run: |
-          echo "### 已发布" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 已发布到 npmjs" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "$(node -p "'@superjunjie/pdf-h5-react@' + require('./package.json').version")" >> "$GITHUB_STEP_SUMMARY"
+          echo "$(node -p "'pdf-h5-react@' + require('./package.json').version")" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "安装方式见 [README](https://github.com/${{ github.repository }}#安装)。" >> "$GITHUB_STEP_SUMMARY"
+          echo "安装：\`npm i pdf-h5-react\`" >> "$GITHUB_STEP_SUMMARY"

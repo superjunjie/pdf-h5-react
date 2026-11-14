@@ -1,5 +1,5 @@
 {
-  "name": "@superjunjie/pdf-h5-react",
+  "name": "pdf-h5-react",
   "version": "0.3.0",
   "description": "基于 pdf.js 的移动端优先 React PDF 阅读器组件（连续滚动 / 翻页 / 捏合缩放 / 文本层 / 搜索 / 缩略图 / 目录）",
   "type": "module",
@@ -47,7 +47,7 @@
     "**/*.css"
   ],
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
+    "registry": "https://registry.npmjs.org",
     "access": "public"
   },
   "scripts": {

@@ -19,7 +19,7 @@
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@superjunjie/pdf-h5-react": ["./src/index.ts"]
+      "pdf-h5-react": ["./src/index.ts"]
     }
   },
   "include": ["src", "demo", "vite.config.ts", "vite.lib.config.ts", "vitest.config.ts"]

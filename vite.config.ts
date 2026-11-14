@@ -8,7 +8,7 @@ export default defineConfig({
   resolve: {
     // demo 通过包名引用库，统一映射到 src，避免同一模块被打进两份（会导致模块级状态分裂）
     alias: {
-      '@superjunjie/pdf-h5-react': fileURLToPath(new URL('./src/index.ts', import.meta.url)),
+      'pdf-h5-react': fileURLToPath(new URL('./src/index.ts', import.meta.url)),
     },
     dedupe: ['react', 'react-dom', 'pdfjs-dist'],
   },

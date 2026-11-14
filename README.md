@@ -1,9 +1,10 @@
-# @superjunjie/pdf-h5-react
+# pdf-h5-react
 
 基于 [pdf.js](https://mozilla.github.io/pdf.js/) 的**移动端优先** React PDF 阅读器组件。
 面向 H5 场景（微信内置浏览器、iOS Safari、Android Chrome），开箱即用，同时把性能和内存控制做在架构里。
 
-[![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-v0.1.0-blue)](https://github.com/superjunjie/pdf-h5-react/pkgs/npm/pdf-h5-react)
+[![npm](https://img.shields.io/npm/v/pdf-h5-react.svg)](https://www.npmjs.com/package/pdf-h5-react)
+[![npm downloads](https://img.shields.io/npm/dm/pdf-h5-react.svg)](https://www.npmjs.com/package/pdf-h5-react)
 [![Release](https://github.com/superjunjie/pdf-h5-react/actions/workflows/release.yml/badge.svg)](https://github.com/superjunjie/pdf-h5-react/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -49,43 +50,12 @@
 
 ## 安装
 
-包发布在 **GitHub Packages**，不是公共 npm 源。首次安装需要两步：配置 `.npmrc` + 登录。
-
-> 当前版本：`0.1.0`（[包页面](https://github.com/superjunjie/pdf-h5-react/pkgs/npm/pdf-h5-react)）
-
-### 1. 配置 registry
-
-在项目根目录创建 `.npmrc`（**注意 `@superjunjie` 作用域必须带斜杠**）：
-
-```ini
-@superjunjie:registry=https://npm.pkg.github.com
-```
-
-### 2. 登录 GitHub Packages
-
-GitHub Packages 强制鉴权，即使包是公开的也必须带着 token 拉取。
-
 ```bash
-npm login --scope=@superjunjie --auth-type=legacy --registry=https://npm.pkg.github.com
-# Username: <你的 GitHub 用户名>
-# Password: <Personal Access Token，至少要有 read:packages>
-# Email:    <你的邮箱>
-```
-
-> `--auth-type=legacy` 是必须的：新版 npm 默认的 web 登录流程对 GitHub Packages 不生效。
-> 也可以用环境变量直接注入，适合 CI：
-> ```ini
-> //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-> ```
-
-### 3. 安装
-
-```bash
-npm i @superjunjie/pdf-h5-react pdfjs-dist
+npm i pdf-h5-react pdfjs-dist
 ```
 
 `react` / `react-dom` 是 peer 依赖，宿主项目已有则不会重复安装。
-
+包发布在 npm 公共源：[npmjs.com/package/pdf-h5-react](https://www.npmjs.com/package/pdf-h5-react)
 ### 生产环境：自托管 pdf.js 资源
 
 库默认从 jsDelivr 加载与依赖版本严格一致的 worker / cmaps / 标准字体 / wasm，**零配置即可运行**。
@@ -93,11 +63,11 @@ npm i @superjunjie/pdf-h5-react pdfjs-dist
 
 ```bash
 # 在依赖了本包的项目里执行（脚本会从 node_modules 解析 pdfjs-dist 的实际版本）
-node node_modules/@superjunjie/pdf-h5-react/scripts/copy-pdfjs-assets.mjs public/pdfjs
+node node_modules/pdf-h5-react/scripts/copy-pdfjs-assets.mjs public/pdfjs
 ```
 
 ```ts
-import { configurePdfjs } from '@superjunjie/pdf-h5-react';
+import { configurePdfjs } from 'pdf-h5-react';
 
 configurePdfjs({
   workerSrc: '/pdfjs/build/pdf.worker.min.mjs',
@@ -116,8 +86,8 @@ configurePdfjs({
 ## 快速开始
 
 ```tsx
-import { PdfH5Reader } from '@superjunjie/pdf-h5-react';
-import '@superjunjie/pdf-h5-react/style.css';
+import { PdfH5Reader } from 'pdf-h5-react';
+import 'pdf-h5-react/style.css';
 
 export default function App() {
   return (
@@ -354,7 +324,7 @@ import {
   computeLayout, quantizeScale, clampCanvasSize,
   pinchTransform, pinchCommit, rafThrottle, debounce, rafBatch,
   searchDocument, flattenOutline, createThumbnailCanvas,
-} from '@superjunjie/pdf-h5-react';
+} from 'pdf-h5-react';
 ```
 
 `src/core/{lru,throttle,layout,gestures}.ts` 都是纯函数/纯类，不依赖 React 与 DOM（`clampCanvasSize` 除外），已覆盖单元测试。
@@ -426,16 +396,19 @@ npm run dev         # http://127.0.0.1:5273
 
 ## 发布
 
-发布由 [GitHub Actions](.github/workflows/release.yml) 自动完成，鉴权使用仓库自带的 `GITHUB_TOKEN`，
-**不需要配置任何 Secret**。
+发布由 [GitHub Actions](.github/workflows/release.yml) 自动完成，推 tag 即触发。
+
+**前置条件**：仓库 `Settings → Secrets and variables → Actions` 里配置 `NPM_TOKEN`
+（npmjs.com 的 Automation token，权限只需 *Read and write*）。
+GitHub 自带的 `GITHUB_TOKEN` 只能发 GitHub Packages，发不了 npmjs，因此必须配这个 Secret。
 
 ```bash
 # 1. 改版本号
-npm version 0.2.0 --no-git-tag-version
-git commit -am "chore: release v0.2.0"
+npm version 0.4.0 --no-git-tag-version
+git commit -am "chore: release v0.4.0"
 
 # 2. 推送并打 tag（脚本会校验 tag 与 package.json 一致）
-node scripts/publish-gh.mjs --tag 0.2.0
+node scripts/publish-gh.mjs --tag 0.4.0
 ```
 
 推送 `v*` tag 后 workflow 会依次执行：类型检查 → 单元测试 → 构建库 → 校验 `dist` 产物 → `npm publish`。
@@ -444,8 +417,13 @@ node scripts/publish-gh.mjs --tag 0.2.0
 也可以在 [Actions 页面](https://github.com/superjunjie/pdf-h5-react/actions/workflows/release.yml)
 手动触发 `Run workflow`，并用输入框覆盖版本号。
 
-> 发到 GitHub Packages 的包**即使公开也强制鉴权**，所以使用方必须配 `.npmrc` 并登录（见上文「安装」）。
-> 这是平台限制，不是包的配置问题。
+### 手动发布（本地）
+
+不想等 CI 时可以本地直发，需要先 `npm login`：
+
+```bash
+npm run build && npm publish        # prepublishOnly 会自动跑 typecheck + test + build
+```
 
 ## License
 

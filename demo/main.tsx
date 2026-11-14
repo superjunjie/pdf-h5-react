@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { configurePdfjs, PdfH5Reader, type PdfH5ReaderHandle, type ThemeMode, type ViewerMode } from '@superjunjie/pdf-h5-react';
+import { configurePdfjs, PdfH5Reader, type PdfH5ReaderHandle, type ThemeMode, type ViewerMode } from 'pdf-h5-react';
 import './demo.css';
 
 // 演示站自托管 pdf.js 资源（npm run assets 生成到 public/pdfjs/）。
