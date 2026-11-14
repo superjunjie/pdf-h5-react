@@ -1,0 +1,85 @@
+{
+  "name": "@superjunjie/pdf-h5-react",
+  "version": "0.1.0",
+  "description": "基于 pdf.js 的移动端优先 React PDF 阅读器组件（连续滚动 / 翻页 / 捏合缩放 / 文本层 / 搜索 / 缩略图 / 目录）",
+  "type": "module",
+  "license": "MIT",
+  "author": "superjunjie",
+  "homepage": "https://github.com/superjunjie/pdf-h5-react#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/superjunjie/pdf-h5-react.git"
+  },
+  "bugs": {
+    "url": "https://github.com/superjunjie/pdf-h5-react/issues"
+  },
+  "keywords": [
+    "pdf",
+    "pdfjs",
+    "pdf.js",
+    "react",
+    "h5",
+    "mobile",
+    "viewer",
+    "reader",
+    "pdf-viewer",
+    "react-pdf",
+    "mobile-pdf"
+  ],
+  "files": [
+    "dist",
+    "scripts/copy-pdfjs-assets.mjs",
+    "README.md",
+    "LICENSE"
+  ],  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./style.css": "./dist/pdf-h5-react.css",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build --config vite.lib.config.ts && node scripts/clean-dist.mjs",
+    "build:demo": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "assets": "node scripts/copy-pdfjs-assets.mjs",
+    "samples": "node scripts/make-samples.mjs",
+    "verify": "node scripts/verify.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "pdfjs-dist": ">=5.0.0",
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "6.5.438",
+    "puppeteer-core": "^25.17.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.8",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^4.1.12"
+  }
+}

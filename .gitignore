@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+dist-demo/
+*.tsbuildinfo
+*.tgz
+
+# 构建 / 打包时的临时目录（沙箱环境下 TMP 指向此处）
+.tmp-build/
+
+# pdf.js 运行时资源：体积 4.4MB，由 npm run assets 生成，不入库
+public/pdfjs/
+
+# 日志与临时文件
+*.log
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/

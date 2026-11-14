@@ -1,0 +1,787 @@
+/**
+ * pdf-h5-react 样式
+ *
+ * 设计约束（移动端优先）：
+ * - 所有可点击元素 ≥ 40px；字号 ≥ 12px；
+ * - 用 CSS 变量做主题，避免运行时计算颜色；
+ * - 不使用 filter/backdrop-filter 做整页效果（安卓低端机开销大）；
+ * - safe-area 适配 iPhone 刘海 / 底部小黑条。
+ */
+
+.pdfh5-root {
+  --pdfh5-bg: #f2f3f5;
+  --pdfh5-page-bg: #ffffff;
+  --pdfh5-text: #1f2329;
+  --pdfh5-text-weak: #646a73;
+  --pdfh5-border: rgba(0, 0, 0, 0.08);
+  --pdfh5-toolbar-bg: rgba(255, 255, 255, 0.94);
+  --pdfh5-toolbar-shadow: 0 -1px 0 rgba(0, 0, 0, 0.06), 0 -8px 24px rgba(0, 0, 0, 0.06);
+  --pdfh5-accent: #3370ff;
+  --pdfh5-accent-weak: rgba(51, 112, 255, 0.12);
+  --pdfh5-hit: rgba(255, 196, 0, 0.42);
+  --pdfh5-hit-active: rgba(255, 122, 0, 0.6);
+  --pdfh5-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--pdfh5-bg);
+  color: var(--pdfh5-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  touch-action: manipulation;
+}
+
+.pdfh5-root.pdfh5-theme-dark {
+  --pdfh5-bg: #14161a;
+  --pdfh5-page-bg: #1e2126;
+  --pdfh5-text: #e6e8eb;
+  --pdfh5-text-weak: #9aa0a6;
+  --pdfh5-border: rgba(255, 255, 255, 0.1);
+  --pdfh5-toolbar-bg: rgba(28, 31, 36, 0.96);
+  --pdfh5-toolbar-shadow: 0 -1px 0 rgba(255, 255, 255, 0.08), 0 -8px 24px rgba(0, 0, 0, 0.4);
+  --pdfh5-accent: #5b8cff;
+  --pdfh5-accent-weak: rgba(91, 140, 255, 0.18);
+  --pdfh5-hit: rgba(255, 208, 0, 0.32);
+  --pdfh5-hit-active: rgba(255, 140, 0, 0.5);
+  --pdfh5-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- 滚动视口 ---------- */
+
+.pdfh5-viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* 双指捏合交给 JS（预演 transform），单指滚动仍交给浏览器 */
+  touch-action: pan-x pan-y;
+  scrollbar-width: thin;
+}
+
+.pdfh5-root[data-mode='page'] .pdfh5-viewport {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+}
+
+.pdfh5-content {
+  position: relative;
+  transform-origin: 0 0;
+  /* 内容尺寸由 JS 精确给定，这里不做额外布局计算 */
+  contain: layout size style;
+}
+
+.pdfh5-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--pdfh5-page-bg);
+  box-shadow: var(--pdfh5-shadow);
+  border-radius: 2px;
+  overflow: hidden;
+  /* 提前把页面提升为合成层，滚动时不触发重绘 */
+  will-change: transform;
+}
+
+.pdfh5-root[data-mode='page'] .pdfh5-page {
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+}
+
+.pdfh5-canvas {
+  position: absolute;
+  inset: 0;
+  /* 渲染完成前是纯色骨架，避免白屏闪烁 */
+  background: var(--pdfh5-page-bg);
+}
+
+.pdfh5-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.pdfh5-pageNumber {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--pdfh5-text-weak);
+  font-size: 11px;
+  line-height: 1.6;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pdfh5-theme-dark .pdfh5-pageNumber {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ---------- 文本层（与 pdf.js TextLayer 配合） ---------- */
+
+.pdfh5-textLayerHost {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* 关键：总缩放因子，pdf.js 的 span 用它换算字号与位置 */
+  --scale-factor: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit, 1));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  line-height: 1;
+}
+
+.pdfh5-textLayerHost .textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdfh5-textLayerHost .textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.pdfh5-textLayerHost .textLayer > :not(.markedContent),
+.pdfh5-textLayerHost .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdfh5-textLayerHost .textLayer .markedContent {
+  display: contents;
+}
+
+.pdfh5-textLayerHost .textLayer ::selection {
+  background: rgba(0, 90, 255, 0.25);
+  color: transparent;
+}
+
+.pdfh5-theme-dark .pdfh5-textLayerHost .textLayer ::selection {
+  background: rgba(120, 170, 255, 0.35);
+}
+
+/* ---------- 链接层 ---------- */
+
+.pdfh5-linkLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pdfh5-linkLayer .pdfh5-link {
+  position: absolute;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.pdfh5-linkLayer .pdfh5-link:active {
+  background: var(--pdfh5-accent-weak);
+}
+
+/* ---------- HUD ---------- */
+
+.pdfh5-hud {
+  position: absolute;
+  right: 12px;
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  opacity: 0.9;
+  transition: opacity 0.2s ease;
+}
+
+.pdfh5-hud[data-gesture] {
+  opacity: 0.35;
+}
+
+.pdfh5-hud-zoom {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.pdfh5-hud-resolving {
+  opacity: 0.6;
+}
+
+/* ---------- 工具栏 ---------- */
+
+.pdfh5-toolbar {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+  background: var(--pdfh5-toolbar-bg);
+  box-shadow: var(--pdfh5-toolbar-shadow);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.pdfh5-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.pdfh5-icon-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 40px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--pdfh5-text);
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.pdfh5-icon-btn:active:not(:disabled) {
+  background: var(--pdfh5-accent-weak);
+}
+
+.pdfh5-icon-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.pdfh5-icon-btn.is-active {
+  background: var(--pdfh5-accent-weak);
+  color: var(--pdfh5-accent);
+}
+
+.pdfh5-page-jump {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdfh5-page-input {
+  width: 46px;
+  height: 32px;
+  padding: 0 4px;
+  border: 1px solid var(--pdfh5-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--pdfh5-text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  outline: none;
+}
+
+.pdfh5-page-input:focus {
+  border-color: var(--pdfh5-accent);
+  box-shadow: 0 0 0 2px var(--pdfh5-accent-weak);
+}
+
+.pdfh5-page-total {
+  color: var(--pdfh5-text-weak);
+  font-size: 13px;
+}
+
+.pdfh5-zoom-label {
+  flex: 0 0 auto;
+  min-width: 52px;
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--pdfh5-text-weak);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.pdfh5-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--pdfh5-border);
+}
+
+.pdfh5-mode-tag {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--pdfh5-accent-weak);
+  color: var(--pdfh5-accent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ---------- 面板 ---------- */
+
+.pdfh5-panel-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  background: rgba(0, 0, 0, 0.32);
+  animation: pdfh5-fade-in 0.16s ease;
+}
+
+.pdfh5-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(86%, 380px);
+  height: 100%;
+  background: var(--pdfh5-page-bg);
+  color: var(--pdfh5-text);
+  box-shadow: 2px 0 16px rgba(0, 0, 0, 0.18);
+  animation: pdfh5-slide-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.pdfh5-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 10px 8px 10px 16px;
+  border-bottom: 1px solid var(--pdfh5-border);
+}
+
+.pdfh5-panel-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pdfh5-outline-list,
+.pdfh5-search-list,
+.pdfh5-thumb-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.pdfh5-outline-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--pdfh5-border);
+  background: transparent;
+  color: var(--pdfh5-text);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pdfh5-outline-item:active:not(:disabled) {
+  background: var(--pdfh5-accent-weak);
+}
+
+.pdfh5-outline-item:disabled {
+  opacity: 0.45;
+}
+
+.pdfh5-outline-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdfh5-outline-page {
+  flex: 0 0 auto;
+  color: var(--pdfh5-text-weak);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdfh5-thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  justify-content: center;
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+}
+
+.pdfh5-thumb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: var(--pdfh5-bg);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.pdfh5-thumb.is-current {
+  border-color: var(--pdfh5-accent);
+}
+
+.pdfh5-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pdfh5-thumb-skeleton {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--pdfh5-border), transparent);
+  background-size: 200% 100%;
+  animation: pdfh5-shimmer 1.2s infinite linear;
+}
+
+.pdfh5-thumb-label {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* ---------- 搜索 ---------- */
+
+.pdfh5-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 10px 12px 6px;
+}
+
+.pdfh5-search-input {
+  flex: 1 1 auto;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--pdfh5-border);
+  border-radius: 10px;
+  background: var(--pdfh5-bg);
+  color: var(--pdfh5-text);
+  font-size: 15px;
+  outline: none;
+}
+
+.pdfh5-search-input:focus {
+  border-color: var(--pdfh5-accent);
+}
+
+.pdfh5-search-summary {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 14px 8px;
+  color: var(--pdfh5-text-weak);
+  font-size: 12px;
+}
+
+.pdfh5-search-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--pdfh5-border);
+  background: transparent;
+  color: var(--pdfh5-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pdfh5-search-item.is-active {
+  background: var(--pdfh5-accent-weak);
+}
+
+.pdfh5-search-page {
+  color: var(--pdfh5-text-weak);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdfh5-search-snippet {
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.pdfh5-search-snippet mark {
+  background: var(--pdfh5-hit);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.pdfh5-textLayerHost mark.pdfh5-hit {
+  background: var(--pdfh5-hit);
+  color: transparent;
+  border-radius: 2px;
+}
+
+.pdfh5-textLayerHost mark.pdfh5-hit-active {
+  background: var(--pdfh5-hit-active);
+}
+
+.pdfh5-perf {
+  flex: 0 0 auto;
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--pdfh5-border);
+  font-size: 12px;
+}
+
+.pdfh5-perf h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pdfh5-text-weak);
+}
+
+.pdfh5-perf dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 10px;
+  margin: 0 0 8px;
+}
+
+.pdfh5-perf dl > div {
+  display: contents;
+}
+
+.pdfh5-perf dt {
+  color: var(--pdfh5-text-weak);
+}
+
+.pdfh5-perf dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.pdfh5-empty {
+  margin: 0;
+  padding: 24px 16px;
+  color: var(--pdfh5-text-weak);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ---------- 状态覆盖层 ---------- */
+
+.pdfh5-status {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.pdfh5-status-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.pdfh5-status-detail {
+  margin: 0;
+  max-width: 320px;
+  color: var(--pdfh5-text-weak);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.pdfh5-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid var(--pdfh5-border);
+  border-top-color: var(--pdfh5-accent);
+  border-radius: 50%;
+  animation: pdfh5-spin 0.8s linear infinite;
+}
+
+.pdfh5-progress {
+  width: min(220px, 60%);
+  height: 3px;
+  border-radius: 999px;
+  background: var(--pdfh5-border);
+  overflow: hidden;
+}
+
+.pdfh5-progress span {
+  display: block;
+  height: 100%;
+  background: var(--pdfh5-accent);
+  transition: width 0.18s ease;
+}
+
+.pdfh5-password {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(320px, 100%);
+}
+
+.pdfh5-password h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.pdfh5-password input {
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--pdfh5-border);
+  border-radius: 10px;
+  background: var(--pdfh5-page-bg);
+  color: var(--pdfh5-text);
+  font-size: 16px;
+  outline: none;
+}
+
+.pdfh5-password input:focus {
+  border-color: var(--pdfh5-accent);
+}
+
+.pdfh5-password-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.pdfh5-btn {
+  min-height: 40px;
+  padding: 0 18px;
+  border: 1px solid var(--pdfh5-border);
+  border-radius: 10px;
+  background: var(--pdfh5-page-bg);
+  color: var(--pdfh5-text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.pdfh5-btn-primary {
+  border-color: transparent;
+  background: var(--pdfh5-accent);
+  color: #fff;
+}
+
+.pdfh5-btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.pdfh5-btn-ghost {
+  background: transparent;
+}
+
+/* ---------- 动画 ---------- */
+
+@keyframes pdfh5-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pdfh5-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes pdfh5-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes pdfh5-slide-in {
+  from {
+    transform: translateX(-8%);
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdfh5-panel,
+  .pdfh5-panel-backdrop {
+    animation: none;
+  }
+}
+
+/* 横屏 / 平板：工具栏更紧凑 */
+@media (min-width: 768px) {
+  .pdfh5-toolbar {
+    justify-content: center;
+  }
+  .pdfh5-mode-tag {
+    margin-left: 12px;
+  }
+}

@@ -1,0 +1,105 @@
+name: Release
+
+# 发布到 GitHub Packages。
+#
+# 触发方式（二选一）：
+#   1) 推送形如 v0.1.0 的 tag —— 版本号必须与 package.json 一致，CI 会校验；
+#   2) 在 Actions 页面手动 Run workflow（可用输入框覆盖版本号）。
+#
+# 鉴权全部使用仓库自带的 GITHUB_TOKEN，不需要配置任何 Secret：
+#   - permissions.packages: write 让它能写入 GitHub Packages
+#   - 同一个仓库内的 workflow 发到本仓库的 Packages 命名空间是允许的
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '覆盖 package.json 的版本号（留空则用 package.json 里的版本）'
+        required: false
+        type: string
+
+# 同一时间只允许一个发布任务，避免并发推送互相覆盖
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@superjunjie'
+          cache: 'npm'
+
+      # npm ci 需要 lockfile 与 package.json 严格一致；
+      # 若 lockfile 缺失或不同步，退化为 npm install，避免发布被卡死。
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "package.json: $PKG_VERSION / tag: $TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag ($TAG_VERSION) 与 package.json ($PKG_VERSION) 不一致，请先同步版本号"
+            exit 1
+          fi
+
+      - name: Apply version override (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        run: npm version "${{ inputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build library
+        run: npm run build
+
+      # 发布前确认产物齐全：缺 index.js / d.ts / css 时不要污染 registry
+      - name: Check dist artifacts
+        run: |
+          for f in dist/index.js dist/index.d.ts dist/pdf-h5-react.css; do
+            if [ ! -f "$f" ]; then
+              echo "::error::缺少构建产物 $f"
+              exit 1
+            fi
+            echo "✓ $f ($(du -h "$f" | cut -f1))"
+          done
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "### 已发布" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "$(node -p "'@superjunjie/pdf-h5-react@' + require('./package.json').version")" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "安装方式见 [README](https://github.com/${{ github.repository }}#安装)。" >> "$GITHUB_STEP_SUMMARY"
