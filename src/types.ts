@@ -1,4 +1,5 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist';
+import type { ReaderEvents, ReaderEventName, ReaderStatus } from './core/readerEvents';
 
 /** PDF 源：URL / 字符串 / 二进制 / 自定义参数 */
 export type PdfSource =
@@ -67,6 +68,25 @@ export interface PdfH5ReaderHandle {
   clearCaches(): void;
   /** 打开 / 关闭内置面板 */
   openPanel(panel: 'outline' | 'thumbnails' | 'search' | null): void;
+
+  // ---- 事件订阅（命令式，等价于 props 回调）----
+  /**
+   * 监听事件，返回取消订阅函数。
+   *
+   * ```ts
+   * const off = ref.current.on('pageChange', ({ page, total }) => setPage(page));
+   * off(); // 取消
+   * ```
+   */
+  on<K extends ReaderEventName>(type: K, listener: (payload: ReaderEvents[K]) => void): () => void;
+  /** 只监听一次 */
+  once<K extends ReaderEventName>(type: K, listener: (payload: ReaderEvents[K]) => void): () => void;
+  /** 移除监听；不传 listener 时清空该事件 */
+  off<K extends ReaderEventName>(type: K, listener?: (payload: ReaderEvents[K]) => void): void;
+  /** 手动触发事件（调试 / 业务自定义事件透传） */
+  trigger<K extends ReaderEventName>(type: K, payload: ReaderEvents[K]): void;
+  /** 运行状态快照 */
+  getStatus(): ReaderStatus;
 }
 
 export interface SearchHit {

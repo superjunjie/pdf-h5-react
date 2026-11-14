@@ -31,8 +31,30 @@ function App() {
   const [total, setTotal] = useState(0);
   const [status, setStatus] = useState<string>('加载中');
   const [fps, setFps] = useState<number | null>(null);
+  const [events, setEvents] = useState<Array<{ time: string; name: string; detail: string }>>([]);
 
   const source = useMemo(() => SAMPLES.find((item) => item.key === sample)!.url, [sample]);
+
+  /** 把事件记到 demo 日志里，直观展示 on/off 用法 */
+  const pushEvent = useCallback((name: string, detail = '') => {
+    setEvents((prev) => {
+      const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      return [{ time, name, detail }, ...prev].slice(0, 30);
+    });
+  }, []);
+
+  // 演示命令式事件订阅：与 props 回调等价，两种写法都可用
+  useEffect(() => {
+    const reader = readerRef.current;
+    if (!reader) return;
+    const offs = [
+      reader.on('ready', ({ total: n }) => pushEvent('ready', `${n} 页`)),
+      reader.on('pageChange', ({ page: p, total: n }) => pushEvent('pageChange', `${p}/${n}`)),
+      reader.on('zoomEnd', (e) => pushEvent('zoomEnd', `${e.zoom.toFixed(2)}x · ${e.duration}ms · ${e.source}`)),
+      reader.on('complete', (e) => pushEvent('complete', `${e.status} · ${e.time}ms`)),
+    ];
+    return () => offs.forEach((off) => off());
+  }, [pushEvent, sample, mode]);
 
   // FPS 采样：验证滚动 / 缩放是否掉帧（真实设备上最直观的指标）
   useEffect(() => {
@@ -58,14 +80,28 @@ function App() {
     (window as unknown as Record<string, unknown>).__pdfh5 = {
       reader: () => readerRef.current,
       stats: () => readerRef.current?.getCacheStats(),
+      status: () => readerRef.current?.getStatus(),
       goTo: (n: number) => readerRef.current?.goToPage(n),
       search: (q: string) => readerRef.current?.search(q),
       zoom: (z: number) => readerRef.current?.setZoom(z),
       page: () => readerRef.current?.getCurrentPage(),
-      status: () => status,
+      events: () => events,
+      demoStatus: () => status,
       fps: () => fps,
+      /** 订阅一个事件并把次数记在 window 上，供断言用 */
+      spy: (name: string) => {
+        const store = ((window as unknown as Record<string, unknown>).__pdfh5Spy ??= {}) as Record<string, number>;
+        store[name] = 0;
+        return readerRef.current?.on(name as never, () => {
+          store[name] = (store[name] ?? 0) + 1;
+        });
+      },
+      spyCount: (name: string) => {
+        const store = ((window as unknown as Record<string, unknown>).__pdfh5Spy ?? {}) as Record<string, number>;
+        return store[name] ?? 0;
+      },
     };
-  }, [status, fps]);
+  }, [events, status, fps]);
 
   const onDocumentLoad = useCallback((doc: { numPages: number }) => {
     setTotal(doc.numPages);
@@ -140,10 +176,17 @@ function App() {
             fitMode={mode === 'page' ? 'page' : 'width'}
             theme={theme}
             initialPage={1}
+            doubleTapZoom={2.5}
+            animationDuration={300}
+            loadingBar
+            backTop
             onDocumentLoad={onDocumentLoad}
             onPageChange={onPageChange}
             onError={(error) => setStatus(`失败：${error.message}`)}
             onExternalLink={(url) => window.open(url, '_blank', 'noopener')}
+            onReady={({ total: n }) => pushEvent('onReady', `${n} 页`)}
+            onZoomEnd={(e) => pushEvent('onZoomEnd', `${e.zoom.toFixed(2)}x · ${e.source}`)}
+            onComplete={(e) => pushEvent('onComplete', `${e.status} · ${e.time}ms`)}
           />
         </div>
       </main>
@@ -157,6 +200,11 @@ function App() {
           FPS <strong>{fps ?? '—'}</strong>
         </span>
         <span className="demo-chip">{mode === 'page' ? '翻页模式' : '连续模式'}</span>
+        {events[0] ? (
+          <span className="demo-chip" title={events.map((e) => `${e.time} ${e.name} ${e.detail}`).join('\n')}>
+            事件 <strong>{events[0].name}</strong> {events[0].detail}
+          </span>
+        ) : null}
       </footer>
     </div>
   );

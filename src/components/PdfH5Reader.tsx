@@ -21,6 +21,9 @@ import { StatusOverlay } from './StatusOverlay';
 import { highlightTextNodes } from '../lib/highlight';
 import { searchDocument } from '../lib/search';
 import { countEvent, countHandled, readCounters } from '../core/metrics';
+import { EventEmitter } from '../core/eventEmitter';
+import { animateZoom, type AnimationHandle } from '../core/zoomAnimation';
+import type { ReaderEvents, ReaderStatus, ZoomEventPayload } from '../core/readerEvents';
 import type { CacheStatsSnapshot, PdfH5ReaderHandle, PdfSource, SearchHit, ThemeMode, ViewerMode } from '../types';
 import type { FitMode } from '../types';
 
@@ -36,7 +39,14 @@ export interface PdfH5ReaderProps {
   initialZoom?: number;
   minZoom?: number;
   maxZoom?: number;
+  /** 双击 / 双指点击的放大目标倍率，默认 2.5 */
   doubleTapZoom?: number;
+  /** 缩放动画时长（ms），默认 300；设为 0 立即跳变 */
+  animationDuration?: number;
+  /** 是否允许缩放手势，默认 true */
+  zoomEnable?: boolean;
+  /** 是否允许滚动，默认 true */
+  scrollEnable?: boolean;
   rotation?: number;
   theme?: ThemeMode;
   gap?: number;
@@ -49,6 +59,10 @@ export interface PdfH5ReaderProps {
   toolbar?: boolean;
   /** 是否显示页码 / 缩放浮层，默认 true */
   showControls?: boolean;
+  /** 是否显示「回到顶部」悬浮按钮，默认 true */
+  backTop?: boolean;
+  /** 是否显示顶部加载进度条，默认 true */
+  loadingBar?: boolean;
   /** 位图缓存上限（字节），默认 96MB */
   bitmapCacheBytes?: number;
   /** 文本层缓存条目上限，默认 24 */
@@ -66,6 +80,18 @@ export interface PdfH5ReaderProps {
   onExternalLink?: (url: string) => void;
   /** 自定义空状态 / 加载失败渲染 */
   renderError?: (error: Error, retry: () => void) => React.ReactNode;
+
+  // ---- 事件回调（与命令式 on/off 等价，按需选一种即可）----
+  /** 文档就绪，可拿到总页数 */
+  onReady?: (payload: { doc: PDFDocumentProxy; total: number }) => void;
+  /** 某一页渲染完成 */
+  onRender?: (payload: { pageNumber: number; pageTime: number; totalTime: number }) => void;
+  /** 滚动（已节流） */
+  onScroll?: (payload: { scrollTop: number; scrollLeft: number; currentPage: number; progress: number }) => void;
+  /** 缩放结束 */
+  onZoomEnd?: (payload: ZoomEventPayload) => void;
+  /** 加载流程结束（成功或失败都会触发） */
+  onComplete?: (payload: { status: 'success' | 'error'; message: string; time: number }) => void;
 }
 
 const THEME_ATTR: Record<Exclude<ThemeMode, 'auto'>, string> = {
@@ -106,6 +132,9 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
     minZoom = 0.5,
     maxZoom = 5,
     doubleTapZoom = 2.5,
+    animationDuration = 300,
+    zoomEnable = true,
+    scrollEnable = true,
     rotation = 0,
     theme = 'auto',
     gap = 12,
@@ -114,6 +143,8 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
     links = true,
     toolbar = true,
     showControls = true,
+    backTop = true,
+    loadingBar = true,
     bitmapCacheBytes,
     textLayerCacheEntries,
     maxCanvasPixels,
@@ -128,6 +159,11 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
     onInternalLink,
     onExternalLink,
     renderError,
+    onReady,
+    onRender,
+    onScroll,
+    onZoomEnd,
+    onComplete,
   } = props;
 
   const resolvedTheme = useResolvedTheme(theme);
@@ -329,23 +365,237 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
   }, [docState.progress, throttledProgress]);
   useEffect(() => () => throttledProgress.cancel(), [throttledProgress]);
 
-  // 缩放到指定倍率并保持锚点
+  // ---------------- 缩放 ----------------
+  // 事件总线：命令式 on/off/trigger 与 React props 回调共用同一套派发路径，
+  // 避免两套机制行为不一致（这是很容易出现的维护陷阱）。
+  const emitterRef = useRef(new EventEmitter<ReaderEvents>());
+  const animationRef = useRef<AnimationHandle | null>(null);
+  const zoomStartRef = useRef<{ zoom: number; time: number; source: ZoomEventPayload['source'] } | null>(null);
+  const zoomThrottled = useMemo(
+    () => throttle((z: number, source: ZoomEventPayload['source']) => emitterRef.current.emit('zoom', { zoom: z, source }), 80),
+    [],
+  );
+
+  /** 记录缩放开始（同一次连续手势只记录一次） */
+  const beginZoom = useCallback((source: ZoomEventPayload['source']) => {
+    if (zoomStartRef.current) return;
+    zoomStartRef.current = { zoom: zoomRef.current, time: Date.now(), source };
+    emitterRef.current.emit('zoomStart', { zoom: zoomRef.current, source });
+  }, []);
+
+  /** 结束缩放并派发 zoomEnd（命令式事件与 props 回调同时触发） */
+  const zoomEndCallbackRef = useRef(onZoomEnd);
+  zoomEndCallbackRef.current = onZoomEnd;
+  const endZoom = useCallback((finalZoom: number) => {
+    const start = zoomStartRef.current;
+    zoomStartRef.current = null;
+    if (!start) return;
+    const payload: ZoomEventPayload = {
+      zoom: finalZoom,
+      scaleChange: start.zoom > 0 ? finalZoom / start.zoom : 1,
+      startZoom: start.zoom,
+      duration: Date.now() - start.time,
+      source: start.source,
+    };
+    emitterRef.current.emit('zoomEnd', payload);
+    zoomEndCallbackRef.current?.(payload);
+  }, []);
+
+  /**
+   * 应用缩放。
+   * @param nextZoom 目标倍率
+   * @param left/top  锚点滚位（可选）
+   * @param options.animate 是否走缓动动画（双击 / 按钮用 true，手势用 false）
+   */
   const commitZoom = useCallback(
-    (nextZoom: number, left?: number, top?: number) => {
+    (
+      nextZoom: number,
+      left?: number,
+      top?: number,
+      options: { animate?: boolean; source?: ZoomEventPayload['source'] } = {},
+    ) => {
       const scroller = scrollRef.current;
-      const clamped = clamp(nextZoom, minZoom, maxZoom);
-      setZoom(clamped);
-      onZoomChange?.(clamped);
-      if (!scroller) return;
-      if (left !== undefined && top !== undefined) {
-        // 先写 zoom，下一帧布局更新后再恢复滚动位置，保证内容已按新尺寸排好
+      const target = clamp(nextZoom, minZoom, maxZoom);
+      const source = options.source ?? 'api';
+      const from = zoomRef.current;
+
+      // 上一次动画未结束时先取消（用户连续双击 / 连按按钮的场景）
+      animationRef.current?.cancel();
+      animationRef.current = null;
+
+      beginZoom(source);
+
+      const applyScroll = (zoomValue: number) => {
+        if (!scroller) return;
+        if (left === undefined || top === undefined) return;
+        // 按比例换算锚点，使动画过程中锚点内容保持不动
+        const ratio = from > 0 ? zoomValue / from : 1;
         requestAnimationFrame(() => {
-          scroller.scrollLeft = clamp(left, 0, maxScrollRef.current.left);
-          scroller.scrollTop = clamp(top, 0, maxScrollRef.current.top);
+          scroller.scrollLeft = clamp(left * ratio, 0, maxScrollRef.current.left);
+          scroller.scrollTop = clamp(top * ratio, 0, maxScrollRef.current.top);
         });
+      };
+
+      if (options.animate && Math.abs(target - from) > 0.001) {
+        animationRef.current = animateZoom({
+          from,
+          to: target,
+          duration: animationDuration,
+          onUpdate: (value) => {
+            setZoom(value);
+            onZoomChange?.(value);
+            zoomThrottled(value, source);
+            applyScroll(value);
+          },
+          onDone: () => {
+            animationRef.current = null;
+            setZoom(target);
+            onZoomChange?.(target);
+            endZoom(target);
+          },
+        });
+        return;
       }
+
+      setZoom(target);
+      onZoomChange?.(target);
+      zoomThrottled(target, source);
+      applyScroll(target);
+
+      // 无动画时同步结束（锚点滚位在下一帧生效，但不影响事件语义）
+      requestAnimationFrame(() => endZoom(target));
     },
-    [minZoom, maxZoom, onZoomChange],
+    [minZoom, maxZoom, onZoomChange, beginZoom, endZoom, zoomThrottled, animationDuration],
+  );
+
+  /**
+   * 事件桥接：把内部状态变化统一派发到事件总线。
+   *
+   * 单一派发点很重要 —— 如果一部分事件走 props、一部分走 emitter，
+   * 两种用法的行为就会漂移（例如 props 有回调但 on('zoomEnd') 收不到）。
+   */
+  const emitRef = useRef(emitterRef);
+  emitRef.current = emitterRef;
+
+  // 文档就绪 / 加载完成
+  const loadStartRef = useRef(Date.now());
+  useEffect(() => {
+    loadStartRef.current = Date.now();
+    emitterRef.current.emit('init', { src });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
+
+  useEffect(() => {
+    if (!doc) return;
+    const time = Date.now() - loadStartRef.current;
+    emitterRef.current.emit('ready', { doc, total: doc.numPages });
+    emitterRef.current.emit('success', { message: `已加载 ${doc.numPages} 页`, time });
+    emitterRef.current.emit('complete', { status: 'success', message: 'ok', time });
+    onReady?.({ doc, total: doc.numPages });
+    onComplete?.({ status: 'success', message: 'ok', time });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc]);
+
+  // 加载失败 → error + complete
+  useEffect(() => {
+    if (!docState.error) return;
+    const time = Date.now() - loadStartRef.current;
+    const message = docState.error.message || '加载失败';
+    emitterRef.current.emit('error', { error: docState.error, message, time });
+    emitterRef.current.emit('complete', { status: 'error', message, time });
+    onComplete?.({ status: 'error', message, time });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docState.error]);
+
+  // 滚动 → scroll 事件（已由 rAF 节流过的 currentPage 驱动）
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const emitScroll = rafThrottle(() => {
+      const horizontal = mode === 'page';
+      const total = doc?.numPages ?? 0;
+      const top = scroller.scrollTop;
+      const left = scroller.scrollLeft;
+      const maxTop = Math.max(1, layout.contentHeight - containerHeight);
+      const progress = horizontal
+        ? containerWidth > 0 && total > 0
+          ? left / Math.max(1, (total - 1) * containerWidth)
+          : 0
+        : clamp(top / maxTop, 0, 1);
+      const payload = { scrollTop: top, scrollLeft: left, currentPage: currentPageRef.current, progress };
+      emitterRef.current.emit('scroll', payload);
+      onScroll?.(payload);
+    });
+    scroller.addEventListener('scroll', emitScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', emitScroll);
+      emitScroll.cancel();
+    };
+  }, [mode, doc?.numPages, layout.contentHeight, containerHeight, containerWidth, onScroll]);
+
+  // 页码变化 → pageChange
+  const lastEmittedPage = useRef(0);
+  useEffect(() => {
+    if (currentPage === lastEmittedPage.current) return;
+    lastEmittedPage.current = currentPage;
+    emitterRef.current.emit('pageChange', { page: currentPage, total: doc?.numPages ?? 0 });
+  }, [currentPage, doc?.numPages]);
+
+  // 缩放开关变化
+  useEffect(() => {
+    emitterRef.current.emit('zoomEnabled', { enabled: zoomEnable });
+  }, [zoomEnable]);
+  useEffect(() => {
+    emitterRef.current.emit('scrollEnabled', { enabled: scrollEnable });
+  }, [scrollEnable]);
+
+  // 卸装：销毁事件 + 通知
+  useEffect(() => {
+    const emitter = emitterRef.current;
+    return () => {
+      try {
+        emitter.emit('destroy', {} as Record<string, never>);
+      } finally {
+        emitter.clear();
+      }
+    };
+  }, []);
+
+  /** 状态快照：供 getStatus() 与调试面板使用 */
+  const readStatus = useCallback((): ReaderStatus => {    const scroller = scrollRef.current;
+    let mountedPages = 0;
+    if (scroller) mountedPages = scroller.querySelectorAll('.pdfh5-page').length;
+    return {
+      ready: Boolean(doc),
+      loading: docState.loading,
+      total: doc?.numPages ?? 0,
+      page: currentPageRef.current,
+      zoom: zoomRef.current,
+      measured: resolved,
+      cacheBytes: bitmapCache.stats().bytes,
+      mountedPages,
+      error: docState.error?.message ?? null,
+      zoomEnabled: zoomEnable,
+      scrollEnabled: scrollEnable,
+    };
+  }, [doc, docState.loading, docState.error, resolved, bitmapCache, zoomEnable, scrollEnable]);
+
+  /** 渲染完成 → render 事件（含单页耗时） */
+  const renderStartRef = useRef(Date.now());
+  const pageStartRef = useRef(new Map<number, number>());
+  const handlePageRendered = useCallback(
+    (pageNumber: number) => {
+      const started = pageStartRef.current.get(pageNumber) ?? Date.now();
+      pageStartRef.current.delete(pageNumber);
+      const payload = {
+        pageNumber,
+        pageTime: Date.now() - started,
+        totalTime: Date.now() - renderStartRef.current,
+      };
+      emitterRef.current.emit('render', payload);
+      onRender?.(payload);
+    },
+    [onRender],
   );
 
   // 模式 / 适配方式切换时重置缩放：
@@ -549,25 +799,81 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
         setRenderTick((tick) => tick + 1);
       },
       openPanel: (next: 'outline' | 'thumbnails' | 'search' | null) => setPanel(next),
+      on: (type, listener) => emitterRef.current.on(type, listener),
+      once: (type, listener) => emitterRef.current.once(type, listener),
+      off: (type, listener) => emitterRef.current.off(type, listener),
+      trigger: (type, payload) => emitterRef.current.emit(type, payload),
+      getStatus: readStatus,
     }),
-    [doc, jumpToPage, commitZoom, minZoom, maxZoom, runSearch, clearSearch, readStats, bitmapCache, textLayerCache, thumbnailCache],
+    [doc, jumpToPage, commitZoom, minZoom, maxZoom, runSearch, clearSearch, readStats, bitmapCache, textLayerCache, thumbnailCache, readStatus],
   );
 
   const pinch = usePinchGesture({
     scrollRef,
     contentRef,
-    enabled: Boolean(doc) && !panel,
+    // zoomEnable=false 时禁用手势与双击，但按钮 / API 缩放仍然可用
+    enabled: Boolean(doc) && !panel && zoomEnable,
     zoom,
     minZoom,
     maxZoom,
     doubleTapZoom,
     maxScroll: () => maxScrollRef.current,
-    onCommit: (nextZoom, left, top) => commitZoom(nextZoom, left, top),
+    // 手势缩放：走 transform 预演 + 松手提交，不需要动画（否则会「跟不上手」）
+    onCommit: (nextZoom, left, top) => commitZoom(nextZoom, left, top, { source: 'gesture' }),
+    // 双击：带动画，保留空间连续性
+    onDoubleTap: (nextZoom, left, top) => commitZoom(nextZoom, left, top, { animate: true, source: 'doubleTap' }),
   });
 
-  const handleRendered = useCallback(() => {
-    setRenderTick((tick) => tick + 1);
-  }, []);
+  /** 加载进度百分比（0-100），无 total 时用不确定态 */
+  const progressPercent = useMemo(() => {
+    const p = docState.progress;
+    if (!p || p.total <= 0) return '35%';
+    return `${Math.min(100, Math.max(4, Math.round((p.loaded / p.total) * 100)))}%`;
+  }, [docState.progress]);
+
+  /** 是否显示「回到顶部」：滚过一屏且不在第一页时才显示，避免遮挡内容 */
+  const [showBackTop, setShowBackTop] = useState(false);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || !backTop) {
+      setShowBackTop(false);
+      return;
+    }
+    const update = rafThrottle(() => {
+      const offset = mode === 'page' ? scroller.scrollLeft : scroller.scrollTop;
+      const viewSize = mode === 'page' ? containerWidth : containerHeight;
+      setShowBackTop(offset > viewSize * 0.8);
+    });
+    scroller.addEventListener('scroll', update, { passive: true });
+    update();
+    return () => {
+      scroller.removeEventListener('scroll', update);
+      update.cancel();
+    };
+  }, [backTop, mode, containerWidth, containerHeight, layout.contentWidth, layout.contentHeight]);
+
+  const handleBackTop = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const from = currentPageRef.current;
+    emitterRef.current.emit('backTop', { from });
+    // 翻页模式回到第 1 页；连续模式平滑滚到顶部
+    if (mode === 'page') {
+      scroller.scrollTo({ left: 0, behavior: 'smooth' });
+      setCurrentPage(1);
+      onPageChange?.(1, doc?.numPages ?? 0);
+    } else {
+      scroller.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [mode, doc?.numPages, onPageChange]);
+
+  const handleRendered = useCallback(
+    (pageNumber: number) => {
+      setRenderTick((tick) => tick + 1);
+      handlePageRendered(pageNumber);
+    },
+    [handlePageRendered],
+  );
 
   // 尺寸变化后（旋转屏幕）重新定位到当前页，避免「翻页后回到第 1 页」
   const resizeRef = useRef({ width: containerWidth, height: containerHeight });
@@ -628,8 +934,16 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
       data-mode={mode}
       data-pdfh5-theme={THEME_ATTR[resolvedTheme]}
     >
+      {/* 加载进度条：固定在容器顶部，不参与布局，避免加载时内容跳动 */}
+      {loadingBar && docState.loading ? (
+        <div className="pdfh5-loadingbar" aria-hidden="true">
+          <span style={{ width: progressPercent }} />
+        </div>
+      ) : null}
+
       <div
         className="pdfh5-viewport"
+        data-scroll-locked={scrollEnable ? undefined : 'true'}
         ref={(node) => {
           (scrollRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
           // useElementSize 的 ref 是 callback ref，必须调用它才能挂上 ResizeObserver
@@ -720,6 +1034,15 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
         </div>
       ) : null}
 
+      {/* 回到顶部：只在滚过一屏后出现，避免遮挡首屏内容 */}
+      {backTop && showBackTop ? (
+        <button type="button" className="pdfh5-backtop" onClick={handleBackTop} aria-label="回到顶部">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      ) : null}
+
       {toolbar ? (
         <Toolbar
           mode={mode}
@@ -733,9 +1056,9 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
           onPrev={() => jumpToPage(currentPageRef.current - 1, true)}
           onNext={() => jumpToPage(currentPageRef.current + 1, true)}
           onJump={(page) => jumpToPage(page)}
-          onZoomIn={() => commitZoom(zoomRef.current * 1.25, undefined, undefined)}
-          onZoomOut={() => commitZoom(zoomRef.current / 1.25, undefined, undefined)}
-          onResetZoom={() => commitZoom(1)}
+          onZoomIn={() => commitZoom(zoomRef.current * 1.25, undefined, undefined, { animate: true, source: 'button' })}
+          onZoomOut={() => commitZoom(zoomRef.current / 1.25, undefined, undefined, { animate: true, source: 'button' })}
+          onResetZoom={() => commitZoom(1, undefined, undefined, { animate: true, source: 'reset' })}
           onTogglePanel={(next) => setPanel(next)}
           onLocate={() => {
             const anchor = centerAnchor();

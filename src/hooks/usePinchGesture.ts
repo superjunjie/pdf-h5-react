@@ -23,6 +23,8 @@ export interface PinchGestureOptions {
   /** 内容的最大滚动范围计算器 */
   maxScroll: () => { left: number; top: number };
   onCommit(zoom: number, scrollLeft: number, scrollTop: number): void;
+  /** 双击缩放（可选）。不提供时退化为 onCommit */
+  onDoubleTap?(zoom: number, scrollLeft: number, scrollTop: number): void;
   onGestureStart?(): void;
   onGestureEnd?(): void;
 }
@@ -185,7 +187,12 @@ export function usePinchGesture(options: PinchGestureOptions): PinchGestureState
             maxScrollLeft: left,
             maxScrollTop: top,
           });
-          latest.current.onCommit(result.zoom, result.scrollLeft, result.scrollTop);
+          // 双击走单独的通道：调用方可以用动画过渡（瞬变会让人「晕」）
+          if (latest.current.onDoubleTap) {
+            latest.current.onDoubleTap(result.zoom, result.scrollLeft, result.scrollTop);
+          } else {
+            latest.current.onCommit(result.zoom, result.scrollLeft, result.scrollTop);
+          }
         }
       }
     };

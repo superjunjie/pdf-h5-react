@@ -12,12 +12,24 @@ export type { PdfjsRuntimeOptions } from './core/pdfjs';
 
 export { LruCache } from './core/lru';
 export type { LruCacheOptions, LruCacheStats } from './core/lru';
+export { EventEmitter } from './core/eventEmitter';
+export type { Listener } from './core/eventEmitter';
+export type {
+  ReaderEvents,
+  ReaderEventName,
+  ReaderEventPayload,
+  ReaderStatus,
+  RenderTiming,
+  ScrollEventPayload,
+  ZoomEventPayload,
+} from './core/readerEvents';
+export { animateZoom, shouldReduceMotion } from './core/zoomAnimation';
+export type { AnimationHandle, ZoomAnimationOptions } from './core/zoomAnimation';
 export { rafThrottle, throttle, debounce, rafBatch } from './core/throttle';
 export type { Cancelable } from './core/throttle';
 export { BitmapCache, TextLayerCache, PageProxyCache, ThumbnailCache } from './core/cache';
 export { RenderQueue } from './core/renderQueue';
-export { computeLayout, pageAtOffset, offsetForPage, quantizeScale, clampCanvasSize, bitmapBytes } from './core/layout';
-export type { PageBox, ViewerLayout } from './core/layout';
+export { computeLayout, pageAtOffset, offsetForPage, quantizeScale, quantizePixelRatio, viewportScaleFor, clampCanvasSize, bitmapBytes } from './core/layout';export type { PageBox, ViewerLayout } from './core/layout';
 export { pinchTransform, pinchCommit, doubleTapTarget, zoomAtPoint } from './core/gestures';
 
 export { usePdfDocument } from './hooks/usePdfDocument';

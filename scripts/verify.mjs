@@ -107,7 +107,7 @@ try {
   const info = await desktop.evaluate(() => ({
     pages: document.querySelectorAll('.pdfh5-page').length,
     canvases: document.querySelectorAll('.pdfh5-page canvas').length,
-    status: window.__pdfh5.status(),
+    status: window.__pdfh5.demoStatus(),
     stats: window.__pdfh5.stats(),
   }));
   check('文档加载成功', info.status.includes('已加载'), info.status);
@@ -155,7 +155,7 @@ try {
     buttons.find((b) => b.textContent.includes('大文档'))?.click();
   });
   await wait(1500);
-  await large.waitForFunction('window.__pdfh5.status().indexOf("已加载") >= 0', { timeout: 60000 });
+  await large.waitForFunction('window.__pdfh5.demoStatus().indexOf("已加载") >= 0', { timeout: 60000 });
   await wait(1500);
 
   const largeMount = await large.evaluate(() => ({
@@ -337,7 +337,7 @@ try {
     [...document.querySelectorAll('.demo-tab')].find((b) => b.textContent.includes('中文演示'))?.click();
   });
   await wait(1200);
-  await large.waitForFunction('window.__pdfh5.status().indexOf("已加载") >= 0', { timeout: 60000 });
+  await large.waitForFunction('window.__pdfh5.demoStatus().indexOf("已加载") >= 0', { timeout: 60000 });
   await wait(1500);
   await large.evaluate(() => window.__pdfh5.reader()?.openPanel('outline'));
   await wait(1500);

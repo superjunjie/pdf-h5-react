@@ -739,6 +739,69 @@
   background: transparent;
 }
 
+/* ---------- 加载进度条 ---------- */
+
+.pdfh5-loadingbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  height: 2px;
+  background: transparent;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.pdfh5-loadingbar span {
+  display: block;
+  height: 100%;
+  background: var(--pdfh5-accent);
+  transition: width 0.2s ease;
+}
+
+/* ---------- 回到顶部 ---------- */
+
+.pdfh5-backtop {
+  position: absolute;
+  right: 14px;
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--pdfh5-toolbar-bg);
+  color: var(--pdfh5-text-weak);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+  cursor: pointer;
+  animation: pdfh5-pop 0.18s ease;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.pdfh5-backtop:active {
+  background: var(--pdfh5-accent-weak);
+  color: var(--pdfh5-accent);
+}
+
+/* 锁定滚动：zoomEnable/scrollEnable=false 时只保留缩放手势 */
+.pdfh5-viewport[data-scroll-locked='true'] {
+  overflow: hidden;
+  touch-action: none;
+}
+
+@keyframes pdfh5-pop {
+  from {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+}
+
 /* ---------- 动画 ---------- */
 
 @keyframes pdfh5-spin {

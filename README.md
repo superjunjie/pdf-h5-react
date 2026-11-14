@@ -195,16 +195,20 @@ RenderQueue      渲染层   可见/预取双并发 + 抢占 + 引用计数取�
 | `fitMode` | `'width' \| 'page' \| 'none'` | `'width'` | 适配方式 |
 | `initialPage` / `initialZoom` | `number` | `1` / `1` | 初始页与初始倍率 |
 | `minZoom` / `maxZoom` / `doubleTapZoom` | `number` | `0.5` / `5` / `2.5` | 缩放边界与双击目标 |
+| `animationDuration` | `number` | `300` | 双击 / 按钮缩放的动画时长（ms），`0` 表示立即跳变 |
+| `zoomEnable` / `scrollEnable` | `boolean` | `true` | 是否允许缩放 / 滚动（禁用手势，按钮与 API 仍可用） |
 | `rotation` | `number` | `0` | 额外旋转（叠加在 PDF 自带 `/Rotate` 之上） |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'auto'` | `auto` 跟随系统并实时响应 |
 | `gap` / `padding` | `number` | `12` / `12` | 页间距 / 内容内边距（均随 zoom 缩放） |
 | `textLayer` | `boolean` | `true` | 关闭可省内存，代价是不可选中/复制 |
 | `links` | `boolean` | `true` | 内链跳转与外链 |
 | `toolbar` / `showControls` | `boolean` | `true` | 内置工具栏 / 页码缩放浮层 |
+| `backTop` / `loadingBar` | `boolean` | `true` | 回到顶部悬浮按钮 / 顶部加载进度条 |
 | `bitmapCacheBytes` | `number` | `96MB` | 位图缓存上限 |
 | `textLayerCacheEntries` | `number` | `24` | 文本层缓存条目上限 |
 | `maxCanvasPixels` / `maxCanvasDimension` | `number` | iOS 安全值 | canvas 限幅 |
 | `onDocumentLoad` / `onPageChange` / `onProgress` / `onError` / `onZoomChange` | callback | — | 事件回调（`onProgress` 已节流） |
+| `onReady` / `onRender` / `onScroll` / `onZoomEnd` / `onComplete` | callback | — | 生命周期与交互事件（见 [事件系统](#事件系统)） |
 | `onInternalLink` / `onExternalLink` | callback | — | 拦截链接行为 |
 | `renderError` | `(error, retry) => ReactNode` | — | 自定义错误态 |
 
@@ -221,7 +225,56 @@ ref.current?.resetZoom();
 await ref.current?.search('关键词');            // 返回 SearchHit[]
 ref.current?.openPanel('outline');              // 'outline' | 'thumbnails' | 'search' | null
 ref.current?.getCacheStats();                   // 缓存与渲染运行时统计
+ref.current?.getStatus();                       // 运行状态快照
 ref.current?.clearCaches();
+```
+
+### 事件系统
+
+两种写法等价，按团队习惯选一种即可（内部走同一条派发路径，行为不会漂移）：
+
+```tsx
+// 方式 A：React props
+<PdfH5Reader
+  src={url}
+  onReady={({ total }) => setTotal(total)}
+  onZoomEnd={(e) => track('zoom', e.zoom)}
+/>
+
+// 方式 B：命令式 on/off（适合在 effect 里按条件订阅）
+const off = ref.current.on('pageChange', ({ page, total }) => setPage(page));
+off();                                              // 取消这一条
+ref.current.off('pageChange');                       // 清空该事件
+ref.current.once('complete', (e) => console.log(e));  // 只监听一次
+ref.current.trigger('backTop', { from: 3 });          // 手动派发
+```
+
+| 事件 | 载荷 | 说明 |
+| --- | --- | --- |
+| `init` | `{ src }` | 开始初始化 |
+| `ready` | `{ doc, total }` | 文档就绪，可拿总页数 |
+| `render` | `{ pageNumber, pageTime, totalTime }` | 单页渲染完成（含耗时，便于做性能埋点） |
+| `success` | `{ message, time }` | 加载成功 |
+| `error` | `{ error, message, time }` | 加载失败 |
+| `complete` | `{ status: 'success' \| 'error', message, time }` | 加载流程结束（成功失败都触发） |
+| `scroll` | `{ scrollTop, scrollLeft, currentPage, progress }` | 滚动（已 rAF 节流） |
+| `pageChange` | `{ page, total }` | 当前页变化 |
+| `zoom` / `zoomStart` | `{ zoom, source }` | 缩放中 / 开始 |
+| `zoomEnd` | `{ zoom, startZoom, scaleChange, duration, source }` | 缩放结束（动画也计入） |
+| `zoomEnabled` / `scrollEnabled` | `{ enabled }` | 开关变化 |
+| `backTop` | `{ from }` | 点击回到顶部 |
+| `destroy` | `{}` | 组件卸载 |
+
+`getStatus()` 返回运行快照，适合做埋点或调试面板：
+
+```ts
+{
+  ready: true, loading: false, total: 22, page: 3, zoom: 1,
+  measured: 22,          // 已解析尺寸的页数
+  cacheBytes: 10_485_760, // 位图缓存占用
+  mountedPages: 5,       // 实际挂载的页面 DOM 数（虚拟化效果）
+  error: null, zoomEnabled: true, scrollEnabled: true,
+}
 ```
 
 ### 可单独复用的模块
