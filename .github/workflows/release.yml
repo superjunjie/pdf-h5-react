@@ -43,24 +43,33 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       # 注意：使用 OIDC 时不要配置任何 registry auth token。
-      # 这里只设置 registry 地址，Node 24+ / npm 11+ 会自动走 trusted publishing。
+      # 这里只设置 registry 地址；发布时 npm 会自动用 GitHub 的 OIDC token 换取短期凭据。
+      #
+      # 用 Node 24：它自带 npm 11.x，满足 trusted publishing 的 npm >= 11.5.1 要求。
+      # 之前用 Node 22.14.0 + `npm install -g npm@latest`，那一步在 runner 上
+      # 会直接失败（权限/路径问题），导致后续全部跳过。直接用自带新版 npm 的
+      # Node 更稳，也少一个失败点。
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.4.0
         with:
-          # trusted publishing 要求 Node >= 22.14.0
-          node-version: '22.14.0'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
-      # npm 11.5.1+ 才支持 OIDC 发布，锁定版本避免 runner 自带的旧 npm 不支持
-      - name: Ensure modern npm
+      # 兜底校验：npm 版本必须 >= 11.5.1，否则 OIDC 发布不可用，提前失败给出清晰原因
+      - name: Verify npm supports trusted publishing
         run: |
-          npm install -g npm@latest
-          npm --version
-          node --version
+          NPM_VERSION="$(npm --version)"
+          echo "npm: $NPM_VERSION / node: $(node --version)"
+          MAJOR="$(echo "$NPM_VERSION" | cut -d. -f1)"
+          MINOR="$(echo "$NPM_VERSION" | cut -d. -f2)"
+          if [ "$MAJOR" -lt 11 ] || { [ "$MAJOR" -eq 11 ] && [ "$MINOR" -lt 5 ]; }; then
+            echo "::error::npm $NPM_VERSION 不支持 trusted publishing（需要 >= 11.5.1）"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: |
