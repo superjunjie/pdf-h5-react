@@ -220,23 +220,9 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
     viewportHeight: containerHeight,
   });
 
-  // 内容比视口宽时（混排了横向页），把横向滚动位置居中，
-  // 否则默认停在最左侧，看起来像页面被裁掉了右半边。
-  const centeringRef = useRef(false);
-  useEffect(() => {
-    const scroller = scrollRef.current;
-    if (!scroller) return;
-    const overflow = layout.contentWidth - containerWidth;
-    if (overflow <= 1) {
-      centeringRef.current = false;
-      return;
-    }
-    // 只在「用户没有主动横向拖动过」时自动居中，避免抢走用户的滚动意图
-    const atEdge = scroller.scrollLeft <= 1 || scroller.scrollLeft >= overflow - 1;
-    if (!centeringRef.current && !atEdge && scroller.scrollLeft > 1) return;
-    centeringRef.current = true;
-    scroller.scrollLeft = overflow / 2;
-  }, [layout.contentWidth, containerWidth, layout.boxes.length]);
+  // 说明：内容宽度由 layout 保证「zoom <= 1 时不超过视口」（见 core/layout.ts），
+  // 因此这里不再需要靠调整 scrollLeft 去「凑」居中 —— 那种做法治标不治本，
+  // 内容仍会被裁切，只是裁切位置不同。
 
   // 滚动位置 + 最大滚动量的 ref（手势 hook 需要同步读取，不能依赖 state）
   const scrollInfoRef = useRef({ left: 0, top: 0 });

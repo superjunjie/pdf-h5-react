@@ -104,36 +104,55 @@ export function computeLayout(input: LayoutInput): ViewerLayout {
     };
   }
 
-  // 连续滚动：全篇统一 scale × zoom，页面宽度一致（视觉整齐）。
+  // 连续滚动：每页「独立适配容器宽度」。
   //
-  // 混排 A4 / 横向页时，统一 scale 会让最宽的页超出容器，于是 content 比视口宽、
-  // 产生横向滚动；此时页面按 contentWidth 居中会整体偏到右边，看起来像被裁切。
-  // 这里不改缩放（不牺牲可读性），而是把「内容比视口宽」这件事显式暴露给调用方：
-  // contentWidth 与每页的 left 都是真实值，由阅读器把滚动位置居中（见 PdfH5Reader）。
-  const totalScale = scale * zoom;
+  // 为什么不是全篇统一 scale：文档里常混排 A4 / 横向 A4 / 窄页。
+  // 统一 scale 只有两种结局——按第一页算，横向页超出视口（文字被截断）；
+  // 按最宽页算，所有竖页被缩小 30%（字变小）。
+  // 两者都不可接受，所以每页各自适配：渲染宽度一律等于可用宽度，
+  // 既不会溢出，也不会因为别的页面而变小。
+  //
+  // 线性性（捏合预演的前提）依然成立：
+  //   renderWidth_i = usableWidth × zoom        （usableWidth 只与容器有关）
+  //   contentWidth  = containerWidth × zoom
+  //   left_i        = (contentWidth − renderWidth_i) / 2 = padding0 × zoom
+  // 即页面位置与尺寸都严格正比于 zoom，所以松手提交后不会跳变。
   const pageSizes: PageSize[] = metrics.map((metric) =>
     metric ? rotatedSize(metric, rotation) : { width: fallback.width, height: fallback.height },
   );
 
-  const widest = pageSizes.reduce((max, size) => Math.max(max, size.width * totalScale), 0);
-  const contentWidth = Math.max(containerWidth, widest + padding * 2);
+  // 注意：可用宽度必须用「未乘 zoom」的内边距计算，否则基准缩放会随 zoom 漂移，
+  // 内容就不再对 zoom 线性，捏合预演会与提交结果错位。
+  const padding0 = Math.max(0, input.padding);
+  const usableWidth = Math.max(1, containerWidth - padding0 * 2);
 
   const boxes: PageBox[] = [];
-  let top = padding;
+  let top = padding; // padding 已乘 zoom
+  let widest = 0;
+
   for (let i = 0; i < pageSizes.length; i += 1) {
     const size = pageSizes[i];
-    const width = size.width * totalScale;
-    const height = size.height * totalScale;
-    boxes.push({
-      pageNumber: i + 1,
-      top,
-      left: (contentWidth - width) / 2,
-      width,
-      height,
-      scale: totalScale,
-    });
+    // fit=width：渲染宽度填满可用宽度；fit=none：沿用调用方给的 scale
+    const pageScale =
+      fitMode === 'none'
+        ? scale * zoom
+        : size.width > 0
+          ? (usableWidth / size.width) * zoom
+          : scale * zoom;
+    const width = size.width * pageScale;
+    const height = size.height * pageScale;
+    widest = Math.max(widest, width);
+    boxes.push({ pageNumber: i + 1, top, left: 0, width, height, scale: pageScale });
     top += height + gap;
   }
+
+  // 内容宽度：zoom 为 1 时恰好等于视口宽；放大后按比例变宽（允许横向滚动看细节）
+  const contentWidth = Math.max(containerWidth, containerWidth * zoom);
+  // 逐页水平居中（每页宽度不同，各自居中）
+  for (const box of boxes) {
+    box.left = (contentWidth - box.width) / 2;
+  }
+
   const contentHeight = Math.max(containerHeight, top - (pageSizes.length ? gap : 0) + padding);
 
   return { boxes, contentWidth, contentHeight, widest, mode };
@@ -211,6 +230,34 @@ export function quantizeScale(value: number, steps: ReadonlyArray<number> = DEFA
   return Math.max(steps[steps.length - 1], value);
 }
 
+/**
+ * 量化「设备像素比」，用于决定画布分辨率。
+ *
+ * 注意这里只处理 DPR —— 不掺任何页面缩放。
+ * 画布像素 = CSS 尺寸 × 本函数返回值，viewport scale 见 viewportScaleFor。
+ *
+ * 量化到固定档位是为了让缩放来回时能命中同一份位图缓存；
+ * 误差控制在 6% 内（视觉不可辨），超过则直接用精确值，宁可少一次命中也不牺牲画质。
+ */
+export function quantizePixelRatio(devicePixelRatio: number, maxDpr = 3): number {
+  const dpr = Math.min(Math.max(devicePixelRatio || 1, 1), maxDpr);
+  const steps = [
+    1, 1.1, 1.25, 1.4, 1.5, 1.6, 1.75, 2, 2.25, 2.5, 2.75, 3,
+  ];
+  let best = steps[0];
+  let bestDiff = Math.abs(steps[0] - dpr);
+  for (const step of steps) {
+    if (step > maxDpr) break;
+    const diff = Math.abs(step - dpr);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = step;
+    }
+  }
+  if (Math.abs(best - dpr) / dpr > 0.06) return dpr;
+  return best;
+}
+
 export interface CanvasLimitOptions {
   /** 总像素上限，iOS 上建议 <= 16.7M */
   maxPixels?: number;
@@ -228,12 +275,18 @@ export interface CanvasSize {
 
 /**
  * 计算 canvas 的像素尺寸并在必要时限幅。
- * 移动端 canvas 有硬上限（iOS Safari 约 16.7M 像素），超限会得到空白画布。
+ *
+ * 注意 scale 的语义：**画布像素 / CSS 像素**（不是 pdf.js 的 viewport scale）。
+ * 它不能直接传给 getViewport —— 中间还差一个「CSS 像素 / PDF 单位」的换算，
+ * 见 viewportScaleFor。
+ *
+ * 移动端 canvas 有硬上限（iOS Safari 约 16.7M 像素、单边 8192），超限会得到空白画布，
+ * 所以宁可降分辨率也要限幅。
  */
 export function clampCanvasSize(
   cssWidth: number,
   cssHeight: number,
-  renderScale: number,
+  pixelRatio: number,
   options: CanvasLimitOptions = {},
 ): CanvasSize {
   const maxPixels = options.maxPixels ?? 16_777_216;
@@ -241,23 +294,38 @@ export function clampCanvasSize(
 
   const safeWidth = Math.max(1, cssWidth);
   const safeHeight = Math.max(1, cssHeight);
-  let scale = renderScale > 0 ? renderScale : 1;
+  let ratio = pixelRatio > 0 ? pixelRatio : 1;
 
   const byDimension = Math.min(maxDimension / safeWidth, maxDimension / safeHeight);
   const byPixels = Math.sqrt(maxPixels / (safeWidth * safeHeight));
   const allowed = Math.min(byDimension, byPixels);
   let clamped = false;
-  if (allowed < scale) {
-    scale = allowed;
+  if (allowed < ratio) {
+    ratio = allowed;
     clamped = true;
   }
 
   return {
-    width: Math.max(1, Math.floor(safeWidth * scale)),
-    height: Math.max(1, Math.floor(safeHeight * scale)),
-    scale,
+    width: Math.max(1, Math.floor(safeWidth * ratio)),
+    height: Math.max(1, Math.floor(safeHeight * ratio)),
+    scale: ratio,
     clamped,
   };
+}
+
+/**
+ * 计算应当传给 `page.getViewport({ scale })` 的值。
+ *
+ * pdf.js 用「PDF 单位 × scale」算渲染尺寸，因此必须把
+ * 「画布像素 / CSS 像素」再乘上「CSS 像素 / PDF 单位」。
+ *
+ * 若直接把 clampCanvasSize 返回的 scale 传给 getViewport，
+ * 渲染内容会比画布大 1/displayScale 倍（窄屏 A4 约 1.63 倍），右侧被画布边界切掉，
+ * 表现就是「文字被截断」。
+ */
+export function viewportScaleFor(cssWidth: number, pdfWidth: number, canvasPixelRatio: number): number {
+  if (!(cssWidth > 0) || !(pdfWidth > 0)) return canvasPixelRatio;
+  return (cssWidth / pdfWidth) * canvasPixelRatio;
 }
 
 /** 位图内存估算（RGBA） */

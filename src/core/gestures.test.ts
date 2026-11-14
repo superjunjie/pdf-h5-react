@@ -8,7 +8,15 @@ import {
   pinchTransform,
   zoomAtPoint,
 } from './gestures';
-import { anchoredScroll, computeLayout, pageAtOffset, quantizeScale } from './layout';
+import {
+  anchoredScroll,
+  clampCanvasSize,
+  computeLayout,
+  pageAtOffset,
+  quantizePixelRatio,
+  quantizeScale,
+  viewportScaleFor,
+} from './layout';
 import type { PageMetric } from '../types';
 
 const metric = (w: number, h: number, pageNumber = 1, rotate = 0): PageMetric => ({
@@ -136,12 +144,12 @@ describe('layout', () => {
     const layout = computeLayout({
       ...base,
       metrics: [metric(600, 800, 1), metric(600, 800, 2)],
-      // 400/600 = 0.6667
+      // 每页独立适配：可用宽度 = 400 - 12*2 = 376
       scale: 400 / 600,
     });
     const [a, b] = layout.boxes;
-    expect(a.width).toBeCloseTo(400);
-    expect(a.height).toBeCloseTo(800 * (400 / 600));
+    expect(a.width).toBeCloseTo(376);
+    expect(a.height).toBeCloseTo(800 * (376 / 600));
     expect(a.top).toBeCloseTo(12);
     expect(b.top).toBeCloseTo(a.top + a.height + 12);
     expect(layout.contentHeight).toBeGreaterThan(b.top + b.height);
@@ -151,13 +159,16 @@ describe('layout', () => {
     const metrics = [metric(600, 800, 1), metric(600, 800, 2)];
     const z1 = computeLayout({ ...base, metrics, scale: 400 / 600, zoom: 1 });
     const z2 = computeLayout({ ...base, metrics, scale: 400 / 600, zoom: 2 });
+    // 页面位置、尺寸、内容宽度都必须精确翻倍，否则松手提交会跳变
     expect(z2.boxes[1].top).toBeCloseTo(z1.boxes[1].top * 2);
     expect(z2.boxes[1].height).toBeCloseTo(z1.boxes[1].height * 2);
+    expect(z2.boxes[1].width).toBeCloseTo(z1.boxes[1].width * 2);
+    expect(z2.boxes[1].left).toBeCloseTo(z1.boxes[1].left * 2);
     expect(z2.contentWidth).toBeCloseTo(z1.contentWidth * 2);
     expect(z2.contentHeight).toBeCloseTo(z1.contentHeight * 2);
   });
 
-  it('旋转 90° 后宽高互换', () => {
+  it('旋转 90° 后按宽度适配，宽高比随旋转互换', () => {
     const layout = computeLayout({
       ...base,
       metrics: [metric(600, 800, 1, 90)],
@@ -165,8 +176,64 @@ describe('layout', () => {
       rotation: 0,
       zoom: 1,
     });
-    expect(layout.boxes[0].width).toBeCloseTo(800);
-    expect(layout.boxes[0].height).toBeCloseTo(600);
+    // 旋转后原始尺寸变为 800×600，适配容器宽度 376 → 缩放 376/800
+    const scale = 376 / 800;
+    expect(layout.boxes[0].width).toBeCloseTo(376);
+    expect(layout.boxes[0].height).toBeCloseTo(600 * scale);
+    // 关键：旋转确实换了宽高（高 < 宽）
+    expect(layout.boxes[0].height).toBeLessThan(layout.boxes[0].width);
+  });
+
+  // 回归测试：混排横向页时，窄页曾因为「统一 scale 按第一页计算」而整体超出视口，
+  // 表现为文字被截断。布局必须保证 zoom <= 1 时任何页面都不超出容器宽度。
+  it('混排横向页时不会超出视口（回归：文字被截断）', () => {
+    const containerWidth = 390;
+    const layout = computeLayout({
+      mode: 'scroll',
+      metrics: [
+        metric(595.28, 841.89, 1), // A4 纵向
+        metric(841.89, 595.28, 2), // A4 横向，更宽
+        metric(480, 800, 3), // 窄页
+      ],
+      fallback: { width: 595.28, height: 841.89 },
+      // 调用方按第一页算出「按宽度适配」的 scale，这正是真实使用路径
+      scale: (containerWidth - 12 * 2) / 595.28,
+      zoom: 1,
+      containerWidth,
+      containerHeight: 800,
+      gap: 12,
+      padding: 12,
+      rotation: 0,
+      fitMode: 'width',
+    });
+
+    expect(layout.contentWidth).toBeLessThanOrEqual(containerWidth + 0.5);
+    for (const box of layout.boxes) {
+      expect(box.left).toBeGreaterThanOrEqual(-0.5);
+      expect(box.left + box.width).toBeLessThanOrEqual(containerWidth + 0.5);
+    }
+    // 横向页与纵向页在「每页独立适配」下渲染宽度相同（都等于可用宽度），
+    // 真正该验证的是：没有任何一页溢出容器。
+    expect(layout.boxes.every((box) => box.width <= containerWidth + 0.5)).toBe(true);
+  });
+
+  it('用户主动放大时允许超出视口（横向滚动查看细节）', () => {
+    const containerWidth = 390;
+    const layout = computeLayout({
+      mode: 'scroll',
+      metrics: [metric(595.28, 841.89, 1)],
+      fallback: { width: 595.28, height: 841.89 },
+      scale: (containerWidth - 24) / 595.28,
+      zoom: 2,
+      containerWidth,
+      containerHeight: 800,
+      gap: 12,
+      padding: 12,
+      rotation: 0,
+      fitMode: 'width',
+    });
+    expect(layout.contentWidth).toBeGreaterThan(containerWidth);
+    expect(layout.boxes[0].width).toBeGreaterThan(containerWidth);
   });
 
   it('翻页模式：每页占满一屏并水平排列、垂直居中', () => {
@@ -214,5 +281,54 @@ describe('layout', () => {
     expect(quantizeScale(0.1)).toBe(0.25);
     expect(quantizeScale(100)).toBe(100);
     expect(quantizeScale(0)).toBe(1);
+  });
+
+  // 回归测试：曾用 Math.max(displayScale, 1) * DPR 计算画布倍率，
+  // 导致窄屏上的 A4 页（displayScale≈0.61）被渲染成 3 倍，画布比显示区域大 4.9 倍，
+  // 回归测试：画布分辨率只由 DPR 决定，绝不掺入页面缩放。
+  // 曾经把页面缩放混进来（Math.max(displayScale, 1) * DPR），
+  // 窄屏 A4 上把 0.615 抬成 1，画布比显示区域大 4.9 倍，只看到左上角 —— 文字被截断。
+  it('画布像素比只跟随 DPR，与页面缩放无关', () => {
+    for (const dpr of [1, 2, 3]) {
+      const ratio = quantizePixelRatio(dpr);
+      // 与 DPR 的偏差必须很小，且绝不能因为页面小而放大
+      expect(ratio / dpr).toBeGreaterThan(0.94);
+      expect(ratio / dpr).toBeLessThan(1.06);
+    }
+    // DPR 被限幅（移动端 3 倍已是上限），避免超大画布
+    expect(quantizePixelRatio(5)).toBeLessThanOrEqual(3);
+    expect(quantizePixelRatio(0)).toBe(1);
+    expect(quantizePixelRatio(Number.NaN)).toBe(1);
+  });
+
+  it('窄屏渲染 A4 页时画布比例正确（不裁切）', () => {
+    // 移动端常见：容器 390，A4 页显示宽 366，PDF 宽 595.28
+    const cssWidth = 366;
+    const cssHeight = 518;
+    const pdfWidth = 595.28;
+    const pdfHeight = 841.89;
+
+    for (const dpr of [1, 2, 3]) {
+      const pixelRatio = quantizePixelRatio(dpr);
+
+      // 不变式 1：pixelRatio ≈ DPR（量化误差 6% 内）。
+      // 曾经把「页面缩放」混进这个值（Math.max(displayScale,1)*DPR），
+      // 窄屏上把 0.615 抬成 1，画布比显示区域大 4.9 倍，只能看到左上角。
+      expect(pixelRatio / dpr).toBeGreaterThan(0.94);
+      expect(pixelRatio / dpr).toBeLessThan(1.06);
+
+      // 不变式 2：画布像素 = CSS 尺寸 × pixelRatio，宽高比与 CSS 一致
+      const size = clampCanvasSize(cssWidth, cssHeight, pixelRatio, {});
+      expect(Math.abs(size.width - Math.floor(cssWidth * pixelRatio))).toBeLessThanOrEqual(1);
+      expect(Math.abs(size.width / size.height - cssWidth / cssHeight) / (cssWidth / cssHeight)).toBeLessThan(0.01);
+
+      // 不变式 3（最关键）：pdf.js 用 viewportScale 渲染出的内容尺寸，
+      // 必须等于画布尺寸。否则内容会被画布边界裁掉 —— 这正是「文字被截断」的成因。
+      const viewportScale = viewportScaleFor(cssWidth, pdfWidth, size.scale);
+      const renderedWidth = pdfWidth * viewportScale;
+      const renderedHeight = pdfHeight * viewportScale;
+      expect(Math.abs(renderedWidth - size.width) / size.width).toBeLessThan(0.01);
+      expect(Math.abs(renderedHeight - size.height) / size.height).toBeLessThan(0.01);
+    }
   });
 });

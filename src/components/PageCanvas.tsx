@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { PDFPageProxy } from 'pdfjs-dist';
-import { clampCanvasSize, quantizeScale } from '../core/layout';
+import { clampCanvasSize, quantizePixelRatio, viewportScaleFor } from '../core/layout';
 import type { BitmapCache } from '../core/cache';
 import { createCacheCanvas } from '../core/cache';
 import type { RenderQueue } from '../core/renderQueue';
@@ -25,10 +25,6 @@ export interface PageCanvasProps {
   maxCanvasPixels?: number;
   maxCanvasDimension?: number;
   onRendered?: (pageNumber: number) => void;
-}
-
-function scaleBucket(scale: number): number {
-  return quantizeScale(scale);
 }
 
 /**
@@ -76,12 +72,22 @@ export function PageCanvas({
     const holder = holderRef.current;
     if (!holder) return;
 
-    // 每页独占显示 canvas；尺寸先按目标位图设好，避免出现 300×150 的默认空画布
-    const bucket = scaleBucket(Math.max(displayScale, 1));
-    const target = clampCanvasSize(width, height, bucket * Math.min(devicePixelRatio, 3), {
+    // 每页独占显示 canvas；尺寸先按目标位图设好，避免出现 300×150 的默认空画布。
+    //
+    // 三个量必须分清（详见 core/layout.ts 的注释）：
+    //   pixelRatio    = 画布像素 / CSS 像素      ≈ DPR（量化后）
+    //   target.scale  = 画布像素 / CSS 像素      → 决定画布尺寸
+    //   viewportScale = 画布像素 / PDF 单位      → 传给 getViewport
+    // 混淆 pixelRatio 与 viewportScale 会让渲染内容比画布大，右侧被切掉（文字截断）。
+    const pixelRatio = quantizePixelRatio(devicePixelRatio);
+    const target = clampCanvasSize(width, height, pixelRatio, {
       maxPixels: maxCanvasPixels,
       maxDimension: maxCanvasDimension,
     });
+
+    // 用页面实际 PDF 宽度换算 viewport scale，保证渲染内容精确铺满画布
+    const pdfWidth = width / (displayScale || 1);
+    const viewportScale = viewportScaleFor(width, pdfWidth, target.scale);
 
     const canvas = document.createElement('canvas');
     if (target.width > 0 && target.height > 0) {
@@ -106,7 +112,8 @@ export function PageCanvas({
     };
 
     // ---------------- 1) 命中缓存：同步绘制，零成本 ----------------
-    const cached = bitmapCache.get(pageNumber, displayScale);
+    // 缓存 key 用 viewportScale（渲染内容分辨率），它是唯一决定位图内容的量。
+    const cached = bitmapCache.get(pageNumber, viewportScale);
     if (cached) {
       paint(cached.canvas, cached.width, cached.height, `cached:${cached.scale}`);
       return;
@@ -115,8 +122,8 @@ export function PageCanvas({
     if (!page || !shouldRender || width <= 0 || height <= 0) return;
 
     // ---------------- 2) 命中同档位缓存 ----------------
-    const key = `${pageNumber}@${target.scale.toFixed(3)}`;
-    const hit = bitmapCache.get(pageNumber, target.scale);
+    const key = `${pageNumber}@${viewportScale.toFixed(3)}`;
+    const hit = bitmapCache.get(pageNumber, viewportScale);
     if (hit) {
       paint(hit.canvas, hit.width, hit.height, key);
       return;
@@ -125,7 +132,7 @@ export function PageCanvas({
     // ---------------- 3) 提交渲染 ----------------
     let disposed = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const viewport = page.getViewport({ scale: target.scale, rotation: page.rotate + rotation });
+    const viewport = page.getViewport({ scale: viewportScale, rotation: page.rotate + rotation });
 
     const render = (): void => {
       if (disposed) return;
@@ -147,7 +154,7 @@ export function PageCanvas({
           return { canvas: offscreen, width: target.width, height: target.height };
         })
         .then((result) => {
-          bitmapCache.put(pageNumber, target.scale, result.canvas);
+          bitmapCache.put(pageNumber, viewportScale, result.canvas);
           if (disposed) return;
           paint(result.canvas, result.width, result.height, key);
           onRenderedRef.current?.(pageNumber);

@@ -19,3 +19,6 @@ Thumbs.db
 # 编辑器
 .vscode/
 .idea/
+
+# verify 脚本的输出目录（截图与报告，非交付物）
+screenshots/
