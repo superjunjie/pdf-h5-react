@@ -40,6 +40,13 @@ async function removeMatching(dir, predicate) {
 const removedCount = await removeMatching(dist, (name) => /\.test\.(d\.ts|d\.mts|js|js\.map)$/.test(name));
 console.log(`清理测试残留声明：${removedCount} 个`);
 
+// 移除 sourcemap：它内嵌完整源码，占包体 60% 以上（287KB / 445KB）。
+// 源码在 GitHub 上本就公开，下载方不需要通过 map 才能调试；
+// 卸载体积翻倍的代价换不来等价收益，因此发布产物只保留可运行文件。
+// 本地开发仍可用 `npm run build` 后回源码断点调试（vite 直接读 src）。
+const removedMaps = await removeMatching(dist, (name) => name.endsWith('.map'));
+console.log(`清理 sourcemap：${removedMaps} 个`);
+
 // 关键产物校验：缺任何一个都不应发布
 const required = [
   'index.js',

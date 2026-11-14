@@ -1,5 +1,5 @@
 import type { FitMode, PageMetric, ViewerMode } from '../types';
-import { computeLayout, fitScale, offsetForPage, type PageBox, type ViewerLayout } from './layout';
+import { computeLayout, fitScale, offsetForPage, pageAtOffset, type PageBox, type ViewerLayout } from './layout';
 
 export interface LayoutParams {
   mode: ViewerMode;
@@ -36,7 +36,7 @@ export function buildLayout(params: LayoutParams): ViewerLayout {
   });
 }
 
-export { computeLayout, fitScale, offsetForPage };
+export { computeLayout, fitScale, offsetForPage, pageAtOffset };
 export type { PageBox, ViewerLayout };
 
 /** 计算基础 scale（适配缩放），与 layout 内部保持同一套规则 */

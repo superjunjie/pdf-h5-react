@@ -7,7 +7,7 @@ import { useElementSize } from '../hooks/useElementSize';
 import { usePinchGesture } from '../hooks/usePinchGesture';
 import { BitmapCache, TextLayerCache, ThumbnailCache } from '../core/cache';
 import { RenderQueue } from '../core/renderQueue';
-import { buildLayout, estimateFallbackSafe, offsetForPage } from '../core/layoutAdapter';
+import { buildLayout, estimateFallbackSafe, offsetForPage, pageAtOffset } from '../core/layoutAdapter';
 import { clamp } from '../core/gestures';
 import { debounce, rafThrottle, throttle } from '../core/throttle';
 import { PageCanvas } from './PageCanvas';
@@ -278,15 +278,24 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
     const onScroll = rafThrottle(() => {
       countHandled('scroll');
       scrollInfoRef.current = { left: scroller.scrollLeft, top: scroller.scrollTop };
+
+      // 页码直接从当前滚动位置算，而不是读 virtual.current。
+      //
+      // 为什么：virtual.current 由 useVirtualPages 的内部 rAF 更新，与滚动事件不同步。
+      // 跳页后先到的那个 scroll 事件读到的是「上一帧」的页码，会把刚设好的目标页
+      // 又改回去（表现为 goToPage(7) 后立刻跳回第 1 页）。
+      // 直接用量化后的滚动位置算页码，结果是幂等的。
       const horizontal = mode === 'page';
       const offset = horizontal ? scroller.scrollLeft : scroller.scrollTop;
       const viewSize = horizontal ? containerWidth : containerHeight;
-      const page = virtual.current;
-      void offset;
-      void viewSize;
-      if (page !== currentPageRef.current) {
-        setCurrentPage(page);
-        onPageChange?.(page, doc?.numPages ?? 0);
+      const page = horizontal
+        ? Math.round(offset / Math.max(1, viewSize)) + 1
+        : pageAtOffset(layout.boxes, offset + viewSize * 0.5, 'y');
+      const bounded = clamp(page, 1, doc?.numPages ?? 1);
+
+      if (bounded !== currentPageRef.current) {
+        // 只更新 state；onPageChange / pageChange 由 currentPage 的 effect 统一派发
+        setCurrentPage(bounded);
       }
     });
     const onScrollEvent = () => {
@@ -298,7 +307,7 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
       scroller.removeEventListener('scroll', onScrollEvent);
       onScroll.cancel();
     };
-  }, [mode, containerWidth, containerHeight, virtual.current, onPageChange, doc?.numPages]);
+  }, [mode, containerWidth, containerHeight, layout.boxes, doc?.numPages]);
 
   // 虚拟窗口变化时预取页面代理
   const ensureRef = useRef(ensurePage);
@@ -533,12 +542,20 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
     };
   }, [mode, doc?.numPages, layout.contentHeight, containerHeight, containerWidth, onScroll]);
 
-  // 页码变化 → pageChange
+  // 页码变化 → pageChange 事件 + onPageChange 回调
+  //
+  // 这里是「当前页」唯一的派发点。之前 jumpToPage 与滚动回调各自调用了一次
+  // onPageChange，导致一次跳页触发两次回调（幂等问题，业务侧容易重复上报）。
+  // 现在统一由 currentPage 的 effect 驱动，天然去重。
   const lastEmittedPage = useRef(0);
+  const pageChangeCallbackRef = useRef(onPageChange);
+  pageChangeCallbackRef.current = onPageChange;
   useEffect(() => {
     if (currentPage === lastEmittedPage.current) return;
     lastEmittedPage.current = currentPage;
-    emitterRef.current.emit('pageChange', { page: currentPage, total: doc?.numPages ?? 0 });
+    const total = doc?.numPages ?? 0;
+    emitterRef.current.emit('pageChange', { page: currentPage, total });
+    pageChangeCallbackRef.current?.(currentPage, total);
   }, [currentPage, doc?.numPages]);
 
   // 缩放开关变化
@@ -628,10 +645,10 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
       } else {
         scroller.scrollTop = offset;
       }
+      // 只更新 state；onPageChange / pageChange 由 currentPage 的 effect 统一派发
       setCurrentPage(target);
-      onPageChange?.(target, doc?.numPages ?? 0);
     },
-    [doc?.numPages, layout, mode, onPageChange],
+    [doc?.numPages, layout, mode],
   );
 
   // 初次进入跳到 initialPage
@@ -860,12 +877,12 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
     // 翻页模式回到第 1 页；连续模式平滑滚到顶部
     if (mode === 'page') {
       scroller.scrollTo({ left: 0, behavior: 'smooth' });
+      // 只更新 state；onPageChange / pageChange 由 currentPage 的 effect 统一派发
       setCurrentPage(1);
-      onPageChange?.(1, doc?.numPages ?? 0);
     } else {
       scroller.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [mode, doc?.numPages, onPageChange]);
+  }, [mode]);
 
   const handleRendered = useCallback(
     (pageNumber: number) => {

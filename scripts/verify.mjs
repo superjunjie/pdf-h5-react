@@ -356,6 +356,61 @@ try {
   check('目录标题可读（PDF 书签编码正确）', !/无标题/.test(jumped.titles.join('')), jumped.titles.slice(0, 2).join(' / '));
   check('点击目录可跳转到目标页', jumped.after !== jumped.before && jumped.after > 1, `第 ${jumped.before} 页 -> 第 ${jumped.after} 页`);
 
+  // ---------- 8. 事件系统与边界场景 ----------
+  console.log('\n=== 事件系统 ===');
+  const eventChecks = await large.evaluate(async () => {
+    const reader = window.__pdfh5.reader();
+    const out = {};
+
+    // getStatus 快照
+    const st = reader.getStatus();
+    out.status = { ready: st.ready, total: st.total, page: st.page, zoom: st.zoom, mounted: st.mountedPages };
+
+    // 单次跳页只触发一次 pageChange（幂等，防重复派发）
+    let changes = 0;
+    const off = reader.on('pageChange', () => { changes += 1; });
+    reader.goToPage(6);
+    await new Promise((r) => setTimeout(r, 1500));
+    off();
+    out.pageChanges = changes;
+    out.pageAfterJump = reader.getCurrentPage();
+
+    // on/off 精确移除
+    let hits = 0;
+    const off2 = reader.on('pageChange', () => { hits += 1; });
+    off2();
+    reader.goToPage(9);
+    await new Promise((r) => setTimeout(r, 1200));
+    out.hitsAfterOff = hits;
+
+    // trigger 手动派发
+    let received = null;
+    const off3 = reader.on('backTop', (p) => { received = p; });
+    reader.trigger('backTop', { from: 42 });
+    off3();
+    out.triggered = received;
+
+    // zoomEnd 事件
+    let zoomEnds = 0;
+    const off4 = reader.on('zoomEnd', () => { zoomEnds += 1; });
+    reader.zoomIn();
+    await new Promise((r) => setTimeout(r, 800));
+    off4();
+    out.zoomEnds = zoomEnds;
+    out.zoomAfter = reader.getStatus().zoom;
+
+    return out;
+  });
+
+  check('getStatus() 返回快照', eventChecks.status.ready === true && eventChecks.status.total > 0, JSON.stringify(eventChecks.status));
+  check(
+    '单次跳页只派发一次 pageChange（幂等）',
+    eventChecks.pageChanges === 1 && eventChecks.pageAfterJump === 6,
+    `${eventChecks.pageChanges} 次，落在第 ${eventChecks.pageAfterJump} 页`,
+  );
+  check('off() 精确移除订阅', eventChecks.hitsAfterOff === 0, `移除后仍收到 ${eventChecks.hitsAfterOff} 次`);
+  check('trigger() 手动派发', eventChecks.triggered?.from === 42, JSON.stringify(eventChecks.triggered));
+  check('zoomEnd 事件与动画收敛', eventChecks.zoomEnds > 0 && eventChecks.zoomAfter > 1, `${eventChecks.zoomEnds} 次，zoom=${eventChecks.zoomAfter.toFixed(2)}`);
   // ---------- 8. 控制台错误 ----------
   const realErrors = consoleErrors.filter(
     (t) => !/favicon|DevTools|preload|deprecated|apple-mobile-web-app-capable/i.test(t),

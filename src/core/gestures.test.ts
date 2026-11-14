@@ -250,8 +250,7 @@ describe('layout', () => {
     expect(layout.boxes[1].top).toBeGreaterThan(0);
   });
 
-  it('pageAtOffset 落在页内返回该页，落在间隙取最近', () => {
-    const layout = computeLayout({
+  it('pageAtOffset 落在页内返回该页，落在间隙取最近', () => {    const layout = computeLayout({
       ...base,
       metrics: [metric(600, 800, 1), metric(600, 800, 2), metric(600, 800, 3)],
       scale: 400 / 600,
@@ -266,6 +265,33 @@ describe('layout', () => {
     expect(pageAtOffset(layout.boxes, gapTop + 2)).toBe(1);
     expect(pageAtOffset(layout.boxes, gapTop + 18)).toBe(2);
     expect(pageAtOffset(layout.boxes, 999999)).toBe(3);
+  });
+
+  // 回归测试：滚动过程中「当前页」必须由滚动位置直接推算，且是幂等的。
+  // 曾经改为读取虚拟窗口的 current（由另一条 rAF 链路更新），
+  // 跳页后先到的 scroll 事件读到过期页码，导致 goToPage(7) 立刻跳回第 1 页。
+  it('当前页由滚动位置推算，重复计算不会回退（回归：跳页后页码回弹）', () => {
+    const layout = computeLayout({
+      ...base,
+      metrics: [metric(600, 800, 1), metric(600, 800, 2), metric(600, 800, 3), metric(600, 800, 4)],
+      scale: 400 / 600,
+      gap: 12,
+    });
+    const viewHeight = base.containerHeight;
+    const pageOf = (scrollTop: number) => pageAtOffset(layout.boxes, scrollTop + viewHeight * 0.5, 'y');
+
+    // 跳到第 3 页：取该页盒子的 top
+    const target = layout.boxes[2].top;
+    const first = pageOf(target);
+    expect(first).toBe(3);
+
+    // 幂等：用同一位置连续计算多次，结果必须一致（不会因为「上一次状态」而漂移）
+    expect(pageOf(target)).toBe(3);
+    expect(pageOf(target)).toBe(3);
+
+    // 相邻页也能正确识别
+    expect(pageOf(layout.boxes[0].top)).toBe(1);
+    expect(pageOf(layout.boxes[3].top)).toBe(4);
   });
 
   it('anchoredScroll 保持锚点内容不动', () => {

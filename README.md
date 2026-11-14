@@ -340,6 +340,10 @@ LRU 回滚命中 > 0 · 位图缓存始终不超过字节上限 · LRU 有实际
 - **canvas 单页上限**。iOS Safari 约 1670 万像素，超限会得到空白画布；`clampCanvasSize` 会自动降分辨率，因此极端放大时是「位图不够清晰」而不是「白屏」。
 - **`fitMode: 'page'` 在连续滚动下按宽度优先**，避免窄页被缩得过小；翻页模式下才严格整页可见。
 - **加密文档**只走 pdf.js 的密码回调，不支持证书/权限密码的细粒度控制。
+- **SSR 场景的 pdf.js 提示**。`pdfjs-dist` 在 Node 环境会在 import 时打印
+  `Please use the legacy build in Node.js environments`。这是 pdf.js 自身的行为，
+  对浏览器产物无影响；在 Next.js 等服务端渲染框架里用 `dynamic(() => import(...), { ssr: false })`
+  或 `'use client'` 即可避免。
 
 ## 开发
 
