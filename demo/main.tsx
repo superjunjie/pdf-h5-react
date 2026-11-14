@@ -180,6 +180,8 @@ function App() {
             animationDuration={300}
             loadingBar
             backTop
+            annotation
+            onAnnotationsChange={(list) => pushEvent('onAnnotationsChange', `${list.length} 条`)}
             onDocumentLoad={onDocumentLoad}
             onPageChange={onPageChange}
             onError={(error) => setStatus(`失败：${error.message}`)}

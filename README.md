@@ -11,6 +11,7 @@
 ```
 连续滚动 / 翻页吸附 · 捏合缩放 · 双击缩放 · 文本选中 · 全文搜索
 缩略图 · 多级目录 · 内链跳转 · 密码文档 · 深浅色主题 · 旋转页 · 混尺寸页面
+高亮批注 · 文字批注 · 手写笔迹 · 事件系统 · 缩放动画
 ```
 
 - 组件库本体 **81KB**（gzip 23KB），样式 12KB；`pdfjs-dist` 作为 peerDependency 由使用方安装。
@@ -36,6 +37,12 @@
 | 300 页大文档 | 桌面端 |
 | --- | --- |
 | ![大文档](docs/screenshots/mobile-large.png) | ![桌面](docs/screenshots/desktop.png) |
+
+批注（高亮 + 跨行高亮 + 文字批注 + 手写），缩放 200% 后仍精确贴合原文：
+
+| 批注总览 | 放大 200% |
+| --- | --- |
+| ![批注](docs/screenshots/annotations.png) | ![批注缩放](docs/screenshots/annotations-zoom.png) |
 
 
 ---
@@ -207,6 +214,10 @@ RenderQueue      渲染层   可见/预取双并发 + 抢占 + 引用计数取�
 | `bitmapCacheBytes` | `number` | `96MB` | 位图缓存上限 |
 | `textLayerCacheEntries` | `number` | `24` | 文本层缓存条目上限 |
 | `maxCanvasPixels` / `maxCanvasDimension` | `number` | iOS 安全值 | canvas 限幅 |
+| `annotation` | `boolean` | `false` | 启用批注功能（工具栏出现批注按钮） |
+| `annotations` | `Annotation[]` | — | 受控批注列表；不传则内部维护 |
+| `annotationStyle` | `Partial<AnnotationStyle>` | — | 批注配色、字号、线宽 |
+| `onAnnotationsChange` | `(list) => void` | — | 批注变化回调 |
 | `onDocumentLoad` / `onPageChange` / `onProgress` / `onError` / `onZoomChange` | callback | — | 事件回调（`onProgress` 已节流） |
 | `onReady` / `onRender` / `onScroll` / `onZoomEnd` / `onComplete` | callback | — | 生命周期与交互事件（见 [事件系统](#事件系统)） |
 | `onInternalLink` / `onExternalLink` | callback | — | 拦截链接行为 |
@@ -277,6 +288,61 @@ ref.current.trigger('backTop', { from: 3 });          // 手动派发
 }
 ```
 
+### 批注
+
+支持**高亮 / 文字批注 / 手写笔迹**三种。数据层与渲染层分离，不修改 PDF 字节。
+
+```tsx
+<PdfH5Reader src={url} annotation onAnnotationsChange={setAnnotations} />
+```
+
+开启 `annotation` 后工具栏出现批注按钮，点开可选三种工具；**单次绘制后自动退出批注模式**，避免想滑动时又画出一条。
+
+受控用法（数据自己管）：
+
+```tsx
+const [annotations, setAnnotations] = useState<Annotation[]>([]);
+
+<PdfH5Reader
+  src={url}
+  annotation
+  annotations={annotations}
+  onAnnotationsChange={setAnnotations}
+/>
+```
+
+命令式 API：
+
+```ts
+ref.current.getAnnotations();
+ref.current.addAnnotation({
+  id: 'a1', kind: 'highlight', pageNumber: 1, createdAt: Date.now(),
+  rects: [{ x: 0.1, y: 0.2, width: 0.4, height: 0.03 }],
+  color: '#ffd400', opacity: 0.4,
+});
+ref.current.removeAnnotation('a1');
+ref.current.clearAnnotations();
+ref.current.setAnnotationMode('ink');  // 'none' | 'highlight' | 'freetext' | 'ink'
+```
+
+**坐标用归一化值（0-1，相对页面宽高），不是像素。** 这样缩放、旋转、切换 fitMode 后批注仍然贴合原文 —— 这是批注功能最容易做错的地方。三种批注的数据结构：
+
+```ts
+// 高亮：支持多段矩形（跨行高亮）
+{ kind: 'highlight', rects: NormRect[], color, opacity, text? }
+
+// 文字批注：锚点 + 文字；fontSize 是相对页面宽度的比例
+{ kind: 'freetext', anchor: NormPoint, text, fontSize, color }
+
+// 手写：归一化点序列；thickness 相对页面宽度
+{ kind: 'ink', points: NormPoint[], thickness, color }
+```
+
+样式可通过 `annotationStyle` 覆盖，或用 CSS 变量 `--pdfh5-anno-hl` / `--pdfh5-anno-ink` 改色。
+
+> 批注默认**不写入 PDF 文件**。改 PDF 需要 pdf-lib 之类依赖，且会破坏原文件的签名与增量更新语义；
+> 需要落盘时用 `getAnnotations()` 导出，自行决定存储方式。
+
 ### 可单独复用的模块
 
 不想用内置 UI 时，可以只拿底层能力：
@@ -335,7 +401,8 @@ LRU 回滚命中 > 0 · 位图缓存始终不超过字节上限 · LRU 有实际
 
 ## 已知边界
 
-- **不支持表单填写与批注编辑**。链接层只铺透明命中区，没有渲染完整 annotation layer（表单编辑器在 H5 里体积大且收益低）。需要时可用 `pdfjs-dist` 的 `AnnotationLayer` 自行扩展。
+- **批注不写入 PDF 文件**。数据存在独立层（`getAnnotations()` 可导出），不修改原文件字节——改 PDF 需要 pdf-lib 等依赖，且会破坏签名与增量更新语义。
+- **链接层只铺透明命中区**，没有渲染完整的 annotation layer（PDF 自带的表单与批注外观不会显示）。需要时可用 `pdfjs-dist` 的 `AnnotationLayer` 自行扩展。
 - **横向页混排时会出现横向滚动**。为保证全篇缩放一致（视觉整齐），不压缩超宽页；阅读器会自动把横向滚动位置居中，避免看起来「右侧被裁」。
 - **canvas 单页上限**。iOS Safari 约 1670 万像素，超限会得到空白画布；`clampCanvasSize` 会自动降分辨率，因此极端放大时是「位图不够清晰」而不是「白屏」。
 - **`fitMode: 'page'` 在连续滚动下按宽度优先**，避免窄页被缩得过小；翻页模式下才严格整页可见。

@@ -11,6 +11,12 @@ export interface ToolbarProps {
   maxZoom: number;
   panel: PanelKind;
   panelSupported: Record<'search' | 'outline' | 'thumbnails', boolean>;
+  /** 是否显示批注按钮 */
+  annotation?: boolean;
+  /** 当前批注模式 */
+  annotationMode?: 'none' | 'highlight' | 'freetext' | 'ink';
+  /** 当前页的批注数量（显示角标） */
+  annotationCount?: number;
   onPrev(): void;
   onNext(): void;
   onJump(page: number): void;
@@ -19,6 +25,8 @@ export interface ToolbarProps {
   onResetZoom(): void;
   onTogglePanel(panel: PanelKind): void;
   onLocate(): void;
+  onToggleAnnotation?(mode: 'highlight' | 'freetext' | 'ink'): void;
+  onClearAnnotations?(): void;
 }
 
 /**
@@ -38,6 +46,9 @@ export function Toolbar({
   maxZoom,
   panel,
   panelSupported,
+  annotation = false,
+  annotationMode = 'none',
+  annotationCount = 0,
   onPrev,
   onNext,
   onJump,
@@ -46,13 +57,21 @@ export function Toolbar({
   onResetZoom,
   onTogglePanel,
   onLocate,
+  onToggleAnnotation,
+  onClearAnnotations,
 }: ToolbarProps) {
   const [draft, setDraft] = useState(String(page));
   const [editing, setEditing] = useState(false);
+  const [annoMenuOpen, setAnnoMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!editing) setDraft(String(page));
   }, [page, editing]);
+
+  // 切换模式时收起批注菜单，避免面板悬空
+  useEffect(() => {
+    setAnnoMenuOpen(false);
+  }, [annotationMode]);
 
   const commit = () => {
     const value = Number.parseInt(draft, 10);
@@ -145,6 +164,60 @@ export function Toolbar({
       <button type="button" className="pdfh5-icon-btn" onClick={onLocate} aria-label="回到适配大小">
         ⤢
       </button>
+
+      {annotation ? (
+        <div className="pdfh5-anno-menu-wrap">
+          <button
+            type="button"
+            className={`pdfh5-icon-btn ${annotationMode !== 'none' ? 'is-active' : ''}`}
+            onClick={() => {
+              if (annotationMode !== 'none') {
+                // 已在批注模式：再点一次退出，符合「开关」直觉
+                onToggleAnnotation?.('highlight');
+                setAnnoMenuOpen(false);
+                return;
+              }
+              setAnnoMenuOpen((open) => !open);
+            }}
+            aria-label="批注"
+            aria-pressed={annotationMode !== 'none'}
+            aria-expanded={annoMenuOpen}
+          >
+            ✎
+            {annotationCount > 0 ? <span className="pdfh5-anno-badge">{annotationCount}</span> : null}
+          </button>
+
+          {annoMenuOpen && annotationMode === 'none' ? (
+            <div className="pdfh5-anno-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => onToggleAnnotation?.('highlight')}>
+                <span className="pdfh5-anno-swatch" style={{ background: 'var(--pdfh5-anno-hl, #ffd400)' }} />
+                高亮
+              </button>
+              <button type="button" role="menuitem" onClick={() => onToggleAnnotation?.('freetext')}>
+                <span className="pdfh5-anno-swatch pdfh5-anno-swatch-text">A</span>
+                文字批注
+              </button>
+              <button type="button" role="menuitem" onClick={() => onToggleAnnotation?.('ink')}>
+                <span className="pdfh5-anno-swatch" style={{ background: 'var(--pdfh5-anno-ink, #e5484d)' }} />
+                手写
+              </button>
+              {annotationCount > 0 ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="pdfh5-anno-menu-danger"
+                  onClick={() => {
+                    onClearAnnotations?.();
+                    setAnnoMenuOpen(false);
+                  }}
+                >
+                  清空全部批注
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <span className="pdfh5-mode-tag" aria-hidden="true">
         {mode === 'page' ? '翻页' : '滚动'}

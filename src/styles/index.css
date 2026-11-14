@@ -802,6 +802,231 @@
   }
 }
 
+/* ---------- 注释层 ---------- */
+
+.pdfh5-root {
+  /* 批注配色，允许外部用 CSS 变量覆盖 */
+  --pdfh5-anno-hl: #ffd400;
+  --pdfh5-anno-ink: #e5484d;
+}
+
+.pdfh5-anno {
+  position: absolute;
+  inset: 0;
+  /* 默认不拦截事件，保证阅读器手势与选词正常 */
+  pointer-events: none;
+  z-index: 3;
+}
+
+.pdfh5-anno-view {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 高亮块 */
+.pdfh5-anno-hl {
+  position: absolute;
+  display: block;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+}
+
+.pdfh5-theme-dark .pdfh5-anno-hl {
+  mix-blend-mode: screen;
+}
+
+.pdfh5-anno-hl-draft {
+  outline: 1px dashed rgba(0, 0, 0, 0.35);
+}
+
+.pdfh5-anno-hit {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* 自由文本 */
+.pdfh5-anno-text {
+  position: absolute;
+  max-width: 60%;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.86);
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.pdfh5-theme-dark .pdfh5-anno-text {
+  background: rgba(30, 33, 38, 0.9);
+}
+
+/* 手写笔迹 */
+.pdfh5-anno-ink {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* 交互捕获层：只在批注模式下出现 */
+.pdfh5-anno-capture {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: crosshair;
+  /* 关键：批注时禁止浏览器自己处理触摸滚动，否则会与绘制抢手势 */
+  touch-action: none;
+}
+
+.pdfh5-anno[data-mode='freetext'] .pdfh5-anno-capture {
+  cursor: text;
+}
+
+/* 文本输入浮层 */
+.pdfh5-anno-editor {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max(180px, 46%);
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--pdfh5-page-bg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+  pointer-events: auto;
+  transform: translate(-4px, 8px);
+}
+
+.pdfh5-anno-input {
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 8px;
+  border: 1px solid var(--pdfh5-border);
+  border-radius: 8px;
+  background: var(--pdfh5-bg);
+  color: var(--pdfh5-text);
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.4;
+  resize: vertical;
+  outline: none;
+}
+
+.pdfh5-anno-input:focus {
+  border-color: var(--pdfh5-accent);
+}
+
+.pdfh5-anno-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.pdfh5-anno-btn {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--pdfh5-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--pdfh5-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pdfh5-anno-btn-primary {
+  border-color: transparent;
+  background: var(--pdfh5-accent);
+  color: #fff;
+}
+
+/* ---------- 批注菜单（工具栏） ---------- */
+
+.pdfh5-anno-menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.pdfh5-anno-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--pdfh5-accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+.pdfh5-anno-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 132px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--pdfh5-toolbar-bg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.pdfh5-anno-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--pdfh5-text);
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pdfh5-anno-menu button:active {
+  background: var(--pdfh5-accent-weak);
+}
+
+.pdfh5-anno-swatch {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+
+.pdfh5-anno-swatch-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pdfh5-accent-weak);
+  color: var(--pdfh5-accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pdfh5-anno-menu-danger {
+  margin-top: 2px;
+  border-top: 1px solid var(--pdfh5-border) !important;
+  border-radius: 0 0 7px 7px !important;
+  color: #e5484d !important;
+}
+
 /* ---------- 动画 ---------- */
 
 @keyframes pdfh5-spin {

@@ -25,6 +25,32 @@ export type {
 } from './core/readerEvents';
 export { animateZoom, shouldReduceMotion } from './core/zoomAnimation';
 export type { AnimationHandle, ZoomAnimationOptions } from './core/zoomAnimation';
+
+// 注释：数据模型 + 坐标换算（可单独复用，做自己的批注 UI）
+export {
+  DEFAULT_ANNOTATION_STYLE,
+  createAnnotationId,
+  groupByPage,
+  isAnnotationValid,
+  isPointInPage,
+  rectFromPoints,
+  rectToPixel,
+  toNormalized,
+  toPixel,
+} from './core/annotations';
+export type {
+  Annotation,
+  AnnotationKind,
+  AnnotationMode,
+  AnnotationStyle,
+  FreetextAnnotation,
+  HighlightAnnotation,
+  InkAnnotation,
+  NormPoint,
+  NormRect,
+} from './core/annotations';
+export { AnnotationLayer } from './components/AnnotationLayer';
+export type { AnnotationLayerProps } from './components/AnnotationLayer';
 export { rafThrottle, throttle, debounce, rafBatch } from './core/throttle';
 export type { Cancelable } from './core/throttle';
 export { BitmapCache, TextLayerCache, PageProxyCache, ThumbnailCache } from './core/cache';

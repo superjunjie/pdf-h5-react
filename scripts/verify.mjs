@@ -411,6 +411,64 @@ try {
   check('off() 精确移除订阅', eventChecks.hitsAfterOff === 0, `移除后仍收到 ${eventChecks.hitsAfterOff} 次`);
   check('trigger() 手动派发', eventChecks.triggered?.from === 42, JSON.stringify(eventChecks.triggered));
   check('zoomEnd 事件与动画收敛', eventChecks.zoomEnds > 0 && eventChecks.zoomAfter > 1, `${eventChecks.zoomEnds} 次，zoom=${eventChecks.zoomAfter.toFixed(2)}`);
+  // ---------- 8b. 注释功能 ----------
+  console.log('\n=== 注释 ===');
+  const annoChecks = await large.evaluate(async () => {
+    const reader = window.__pdfh5.reader();
+    reader.clearAnnotations();
+    // 必须用「当前可见页」：虚拟化下只有可视区附近的页面才有 DOM，
+    // 在未挂载的页上建批注会查不到元素（测试假失败）。
+    const currentPage = reader.getCurrentPage();
+    const base = { pageNumber: currentPage, createdAt: Date.now() };
+    reader.addAnnotation({ ...base, id: 'a-hl', kind: 'highlight', rects: [{ x: 0.1, y: 0.2, width: 0.4, height: 0.03 }], color: '#ffd400', opacity: 0.4 });
+    reader.addAnnotation({ ...base, id: 'a-ft', kind: 'freetext', anchor: { x: 0.15, y: 0.5 }, text: '批注内容', fontSize: 0.022, color: '#000' });
+    reader.addAnnotation({ ...base, id: 'a-ink', kind: 'ink', points: [{ x: 0.2, y: 0.7 }, { x: 0.4, y: 0.72 }], thickness: 0.003, color: '#e5484d' });
+    await new Promise((r) => setTimeout(r, 1000));
+    const afterAdd = reader.getAnnotations().length;
+
+    // 无效注释必须被拒绝
+    reader.addAnnotation({ ...base, id: 'a-bad', kind: 'freetext', anchor: { x: 0.1, y: 0.1 }, text: '  ', fontSize: 0.02, color: '#000' });
+    await new Promise((r) => setTimeout(r, 300));
+    const afterInvalid = reader.getAnnotations().length;
+
+    // 归一化：缩放前后相对位置不变
+    const measure = () => {
+      const el = document.querySelector(`.pdfh5-page[data-page-number="${reader.getCurrentPage()}"] .pdfh5-anno-hl`);
+      const pg = document.querySelector(`.pdfh5-page[data-page-number="${reader.getCurrentPage()}"]`);
+      if (!el || !pg) return null;
+      const r = el.getBoundingClientRect();
+      const p = pg.getBoundingClientRect();
+      return { relX: +((r.left - p.left) / p.width).toFixed(3), relW: +(r.width / p.width).toFixed(3), pageW: Math.round(p.width) };
+    };
+    reader.resetZoom();
+    await new Promise((r) => setTimeout(r, 700));
+    const at1x = measure();
+    reader.setZoom(2);
+    await new Promise((r) => setTimeout(r, 1200));
+    const at2x = measure();
+    reader.setZoom(1);
+    await new Promise((r) => setTimeout(r, 700));
+
+    // 删除与清空
+    reader.removeAnnotation('a-hl');
+    await new Promise((r) => setTimeout(r, 300));
+    const afterRemove = reader.getAnnotations().length;
+    reader.clearAnnotations();
+    await new Promise((r) => setTimeout(r, 300));
+    const afterClear = reader.getAnnotations().length;
+
+    return { afterAdd, afterInvalid, at1x, at2x, afterRemove, afterClear };
+  });
+
+  check('三种批注可添加（高亮/文本/手写）', annoChecks.afterAdd === 3, `${annoChecks.afterAdd} 条`);
+  check('无效批注被拒绝', annoChecks.afterInvalid === 3, `仍为 ${annoChecks.afterInvalid} 条`);
+  check(
+    '缩放后批注相对位置不变（归一化坐标）',
+    annoChecks.at1x && annoChecks.at2x && Math.abs(annoChecks.at1x.relX - annoChecks.at2x.relX) < 0.01 && Math.abs(annoChecks.at1x.relW - annoChecks.at2x.relW) < 0.01,
+    `1x: x=${annoChecks.at1x?.relX} w=${annoChecks.at1x?.relW} / 2x: x=${annoChecks.at2x?.relX} w=${annoChecks.at2x?.relW}（页面 ${annoChecks.at1x?.pageW}->${annoChecks.at2x?.pageW}px）`,
+  );
+  check('按 id 删除批注', annoChecks.afterRemove === 2, `${annoChecks.afterRemove} 条`);
+  check('清空全部批注', annoChecks.afterClear === 0, `${annoChecks.afterClear} 条`);
   // ---------- 8. 控制台错误 ----------
   const realErrors = consoleErrors.filter(
     (t) => !/favicon|DevTools|preload|deprecated|apple-mobile-web-app-capable/i.test(t),

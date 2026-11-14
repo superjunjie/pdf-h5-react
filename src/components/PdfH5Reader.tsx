@@ -24,6 +24,15 @@ import { countEvent, countHandled, readCounters } from '../core/metrics';
 import { EventEmitter } from '../core/eventEmitter';
 import { animateZoom, type AnimationHandle } from '../core/zoomAnimation';
 import type { ReaderEvents, ReaderStatus, ZoomEventPayload } from '../core/readerEvents';
+import { AnnotationLayer } from './AnnotationLayer';
+import {
+  DEFAULT_ANNOTATION_STYLE,
+  groupByPage,
+  isAnnotationValid,
+  type Annotation,
+  type AnnotationMode,
+  type AnnotationStyle,
+} from '../core/annotations';
 import type { CacheStatsSnapshot, PdfH5ReaderHandle, PdfSource, SearchHit, ThemeMode, ViewerMode } from '../types';
 import type { FitMode } from '../types';
 
@@ -63,6 +72,14 @@ export interface PdfH5ReaderProps {
   backTop?: boolean;
   /** 是否显示顶部加载进度条，默认 true */
   loadingBar?: boolean;
+  /** 是否启用注释功能（工具栏出现批注按钮），默认 false */
+  annotation?: boolean;
+  /** 受控注释列表；不传则由组件内部维护 */
+  annotations?: Annotation[];
+  /** 注释样式覆盖 */
+  annotationStyle?: Partial<AnnotationStyle>;
+  /** 注释变化回调（新增 / 删除 / 清空） */
+  onAnnotationsChange?: (annotations: Annotation[]) => void;
   /** 位图缓存上限（字节），默认 96MB */
   bitmapCacheBytes?: number;
   /** 文本层缓存条目上限，默认 24 */
@@ -145,6 +162,10 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
     showControls = true,
     backTop = true,
     loadingBar = true,
+    annotation = false,
+    annotations: controlledAnnotations,
+    annotationStyle: annotationStyleOverride,
+    onAnnotationsChange,
     bitmapCacheBytes,
     textLayerCacheEntries,
     maxCanvasPixels,
@@ -197,6 +218,72 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
   currentPageRef.current = currentPage;
 
   const [panel, setPanel] = useState<'outline' | 'thumbnails' | 'search' | null>(null);
+
+  // ---------------- 注释 ----------------
+  // 受控 / 非受控双模式：不传 annotations 时内部维护，简化简单场景的接入成本
+  const [innerAnnotations, setInnerAnnotations] = useState<Annotation[]>([]);
+  const annotations = controlledAnnotations ?? innerAnnotations;
+  // 给命令式 API 读取最新值用：ref 不受闭包快照影响
+  const annotationsRef = useRef(annotations);
+  annotationsRef.current = annotations;
+  const [annotationMode, setAnnotationMode] = useState<AnnotationMode>('none');
+  const annotationModeRef = useRef(annotationMode);
+  annotationModeRef.current = annotationMode;
+  const annotationStyle = useMemo<AnnotationStyle>(
+    () => ({ ...DEFAULT_ANNOTATION_STYLE, ...annotationStyleOverride }),
+    [annotationStyleOverride],
+  );
+  const annotationsByPage = useMemo(() => groupByPage(annotations), [annotations]);
+  /** 正在绘制 / 输入批注时暂停翻页与滚动手势，避免抢事件 */
+  const [annoActive, setAnnoActive] = useState(false);
+
+  const applyAnnotations = useCallback(
+    (next: Annotation[] | ((prev: Annotation[]) => Annotation[])) => {
+      // 用函数式更新，避免闭包捕获过期的 annotations。
+      //
+      // 这是一个真实踩过的坑：之前写成 next(annotations)，而 applyAnnotations 被
+      // useCallback 缓存、annotions 又是依赖项之一。当调用方通过 ref 连续调用
+      // addAnnotation 时，handle 里拿到的是首次渲染的闭包，annotations 恒为空数组，
+      // 结果每次都是「空数组 + 1 条」，只有最后一条活下来。
+      if (typeof next === 'function') {
+        if (controlledAnnotations === undefined) {
+          setInnerAnnotations((prev) => {
+            const resolved = next(prev);
+            onAnnotationsChange?.(resolved);
+            return resolved;
+          });
+        } else {
+          // 受控模式：只上报，由调用方决定是否更新
+          onAnnotationsChange?.(next(controlledAnnotations));
+        }
+        return;
+      }
+      if (controlledAnnotations === undefined) setInnerAnnotations(next);
+      onAnnotationsChange?.(next);
+    },
+    [controlledAnnotations, onAnnotationsChange],
+  );
+
+  const handleAddAnnotation = useCallback(
+    (item: Annotation) => {
+      if (!isAnnotationValid(item)) return;
+      applyAnnotations((prev) => [...prev, item]);
+      // 单次绘制后回到浏览模式：避免用户想滑动时又画出一条
+      setAnnotationMode('none');
+    },
+    [applyAnnotations],
+  );
+
+  const handleRemoveAnnotation = useCallback(
+    (id: string) => {
+      applyAnnotations((prev) => prev.filter((a) => a.id !== id));
+    },
+    [applyAnnotations],
+  );
+
+  const handleClearAnnotations = useCallback(() => {
+    applyAnnotations([]);
+  }, [applyAnnotations]);
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
   const [searchIndex, setSearchIndex] = useState(0);
   const [pageProxyMap, setPageProxyMap] = useState<Record<number, PDFPageProxy>>({});
@@ -821,15 +908,45 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
       off: (type, listener) => emitterRef.current.off(type, listener),
       trigger: (type, payload) => emitterRef.current.emit(type, payload),
       getStatus: readStatus,
+      getAnnotations: () => annotationsRef.current,
+      addAnnotation: (item) => {
+        if (isAnnotationValid(item)) applyAnnotations((prev) => [...prev, item]);
+      },
+      removeAnnotation: handleRemoveAnnotation,
+      clearAnnotations: handleClearAnnotations,
+      setAnnotationMode: (next) => {
+        setAnnotationMode(next);
+        annotationModeRef.current = next;
+      },
+      getAnnotationMode: () => annotationModeRef.current,
     }),
-    [doc, jumpToPage, commitZoom, minZoom, maxZoom, runSearch, clearSearch, readStats, bitmapCache, textLayerCache, thumbnailCache, readStatus],
+    [
+      doc,
+      jumpToPage,
+      commitZoom,
+      minZoom,
+      maxZoom,
+      runSearch,
+      clearSearch,
+      readStats,
+      bitmapCache,
+      textLayerCache,
+      thumbnailCache,
+      readStatus,
+      annotations,
+      applyAnnotations,
+      handleRemoveAnnotation,
+      handleClearAnnotations,
+      annotationMode,
+    ],
   );
 
   const pinch = usePinchGesture({
     scrollRef,
     contentRef,
-    // zoomEnable=false 时禁用手势与双击，但按钮 / API 缩放仍然可用
-    enabled: Boolean(doc) && !panel && zoomEnable,
+    // zoomEnable=false 时禁用手势与双击，但按钮 / API 缩放仍然可用。
+    // 批注模式（或在输入批注）时也禁用手势：否则单指拖拽会同时触发绘制和滚动。
+    enabled: Boolean(doc) && !panel && zoomEnable && annotationMode === 'none' && !annoActive,
     zoom,
     minZoom,
     maxZoom,
@@ -1034,6 +1151,20 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
                       onExternalLink={onExternalLink}
                     />
                   ) : null}
+                  {/* 注释层放在最上层：既显示既有批注，也在批注模式下接收指针事件 */}
+                  {annotation ? (
+                    <AnnotationLayer
+                      pageNumber={box.pageNumber}
+                      width={box.width}
+                      height={box.height}
+                      mode={annotationMode}
+                      style={annotationStyle}
+                      annotations={annotationsByPage.get(box.pageNumber) ?? []}
+                      enabled={isVisible}
+                      onAdd={handleAddAnnotation}
+                      onActiveChange={setAnnoActive}
+                    />
+                  ) : null}
                   <div className="pdfh5-pageNumber">{box.pageNumber}</div>
                 </div>
               );
@@ -1070,6 +1201,14 @@ export const PdfH5Reader = forwardRef<PdfH5ReaderHandle, PdfH5ReaderProps>(funct
           maxZoom={maxZoom}
           panel={panel}
           panelSupported={{ search: true, outline: true, thumbnails: true }}
+          annotation={annotation}
+          annotationMode={annotationMode}
+          annotationCount={annotations.length}
+          onToggleAnnotation={(kind) => {
+            // 同一个工具再次点击 = 退出批注模式（工具栏里也是这个语义）
+            setAnnotationMode((prev) => (prev === kind ? 'none' : kind));
+          }}
+          onClearAnnotations={handleClearAnnotations}
           onPrev={() => jumpToPage(currentPageRef.current - 1, true)}
           onNext={() => jumpToPage(currentPageRef.current + 1, true)}
           onJump={(page) => jumpToPage(page)}

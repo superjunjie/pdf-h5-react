@@ -1,5 +1,6 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import type { ReaderEvents, ReaderEventName, ReaderStatus } from './core/readerEvents';
+import type { Annotation, AnnotationMode } from './core/annotations';
 
 /** PDF 源：URL / 字符串 / 二进制 / 自定义参数 */
 export type PdfSource =
@@ -87,6 +88,20 @@ export interface PdfH5ReaderHandle {
   trigger<K extends ReaderEventName>(type: K, payload: ReaderEvents[K]): void;
   /** 运行状态快照 */
   getStatus(): ReaderStatus;
+
+  // ---- 注释 ----
+  /** 当前全部批注 */
+  getAnnotations(): Annotation[];
+  /** 追加一条批注 */
+  addAnnotation(annotation: Annotation): void;
+  /** 按 id 删除 */
+  removeAnnotation(id: string): void;
+  /** 清空全部批注 */
+  clearAnnotations(): void;
+  /** 切换批注工具；'none' 表示退出批注模式 */
+  setAnnotationMode(mode: AnnotationMode): void;
+  /** 当前批注模式 */
+  getAnnotationMode(): AnnotationMode;
 }
 
 export interface SearchHit {
