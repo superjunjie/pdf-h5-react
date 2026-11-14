@@ -3,7 +3,10 @@
 基于 [pdf.js](https://mozilla.github.io/pdf.js/) 的**移动端优先** React PDF 阅读器组件。
 面向 H5 场景（微信内置浏览器、iOS Safari、Android Chrome），开箱即用，同时把性能和内存控制做在架构里。
 
-[![npm (scoped)](https://img.shields.io/badge/registry-GitHub%20Packages-blue)](https://github.com/superjunjie/pdf-h5-react/pkgs/npm/pdf-h5-react)
+[![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-v0.1.0-blue)](https://github.com/superjunjie/pdf-h5-react/pkgs/npm/pdf-h5-react)
+[![Release](https://github.com/superjunjie/pdf-h5-react/actions/workflows/release.yml/badge.svg)](https://github.com/superjunjie/pdf-h5-react/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 
 ```
 连续滚动 / 翻页吸附 · 捏合缩放 · 双击缩放 · 文本选中 · 全文搜索
@@ -40,6 +43,8 @@
 ## 安装
 
 包发布在 **GitHub Packages**，不是公共 npm 源。首次安装需要两步：配置 `.npmrc` + 登录。
+
+> 当前版本：`0.1.0`（[包页面](https://github.com/superjunjie/pdf-h5-react/pkgs/npm/pdf-h5-react)）
 
 ### 1. 配置 registry
 
@@ -295,6 +300,30 @@ npm run dev         # http://127.0.0.1:5273
 技术栈：Vite 7 + React 19 + TypeScript 5.9 + pdfjs-dist 6（peer）。
 库产物为 ESM + 独立 CSS + 完整 `.d.ts`，`react` / `react-dom` / `pdfjs-dist` 均为 external。
 
+## 发布
+
+发布由 [GitHub Actions](.github/workflows/release.yml) 自动完成，鉴权使用仓库自带的 `GITHUB_TOKEN`，
+**不需要配置任何 Secret**。
+
+```bash
+# 1. 改版本号
+npm version 0.2.0 --no-git-tag-version
+git commit -am "chore: release v0.2.0"
+
+# 2. 推送并打 tag（脚本会校验 tag 与 package.json 一致）
+node scripts/publish-gh.mjs --tag 0.2.0
+```
+
+推送 `v*` tag 后 workflow 会依次执行：类型检查 → 单元测试 → 构建库 → 校验 `dist` 产物 → `npm publish`。
+版本校验不通过（tag 与 `package.json` 不一致）会直接失败，避免发错版本。
+
+也可以在 [Actions 页面](https://github.com/superjunjie/pdf-h5-react/actions/workflows/release.yml)
+手动触发 `Run workflow`，并用输入框覆盖版本号。
+
+> 发到 GitHub Packages 的包**即使公开也强制鉴权**，所以使用方必须配 `.npmrc` 并登录（见上文「安装」）。
+> 这是平台限制，不是包的配置问题。
+
 ## License
 
 MIT
+
