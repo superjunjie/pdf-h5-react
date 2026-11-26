@@ -140,6 +140,20 @@ export function viewportScaleFor(cssWidth: number, pdfWidth: number, canvasRatio
   return (cssWidth / pdfWidth) * canvasRatio;
 }
 
+/**
+ * 缩放时保持锚点内容不动的滚动位置换算。
+ *
+ * 内容布局宽度与滚动范围都随 zoom 线性变化，所以：
+ *   新滚动 = (旧滚动 + 视口内偏移) × 缩放比 − 视口内偏移
+ *
+ * 例：zoom 1→2，点击处距视口左 100px、当前 scrollLeft 50，
+ * 则该点内容坐标 150，放大后应在 300，故 scrollLeft = 300 − 100 = 200。
+ */
+export function anchoredScroll(scroll: number, viewportOffset: number, ratio: number): number {
+  const value = (scroll + viewportOffset) * ratio - viewportOffset;
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
 /** 二分查找：给定滚动位置，返回当前阅读页（1 基） */
 export function pageAtOffset(boxes: ReadonlyArray<PageBox>, offset: number): number {
   if (boxes.length === 0) return 1;

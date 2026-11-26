@@ -13,13 +13,12 @@
 
 .pdfv-content {
   position: relative;
-  width: 100%;
+  /* 宽度由组件按 containerWidth × zoom 显式设置，页面正好铺满，无需居中 */
 }
 
 .pdfv-page {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
   background: #fff;
   box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
   overflow: hidden;

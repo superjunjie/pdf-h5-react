@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import { loadPdf, type PdfSource } from './pdfjs';
 import {
+  anchoredScroll,
   clampCanvasSize,
   computeLayout,
   pageAtOffset,
@@ -17,6 +18,11 @@ const MEASURE_CONCURRENCY = 8;
 const CANVAS_CACHE_LIMIT = 8;
 /** 提前多少屏开始渲染（1 = 前后各一屏） */
 const PRELOAD_SCREENS = 1;
+/** 双击判定：两次点击的间隔与位移阈值 */
+const DOUBLE_TAP_DELAY = 300;
+const DOUBLE_TAP_DISTANCE = 30;
+/** 按下到抬起移动超过这个距离就不算点击（是拖动） */
+const TAP_SLOP = 10;
 
 export interface PdfViewerProps {
   /** PDF 来源：URL / ArrayBuffer / Uint8Array */
@@ -31,6 +37,10 @@ export interface PdfViewerProps {
   maxCanvasPixels?: number;
   /** 单页画布单边上限，默认 8192 */
   maxCanvasDimension?: number;
+  /** 是否允许双击放大，默认 true */
+  zoomable?: boolean;
+  /** 双击放大到的倍率，默认 2 */
+  doubleTapZoom?: number;
   className?: string;
   style?: React.CSSProperties;
   onLoad?: (doc: PDFDocumentProxy, total: number) => void;
@@ -45,19 +55,22 @@ export interface PdfViewerProps {
 /**
  * 极简 FIFO 位图缓存：只解决「来回滚动时不必重渲染」，不做内存计量。
  *
+ * key 必须带上渲染分辨率（`页码@显示宽度`）—— 双击放大后页面变宽，
+ * 若只按页码缓存，就会复用放大前的低分辨率位图，画面发虚。
+ *
  * 淘汰时**不能**把 canvas 尺寸置 0 —— 它可能仍挂在页面上（用户正看着），
  * 置 0 会让画面瞬间变空白。这里只丢弃引用，让 GC 在元素卸载后回收。
  */
 class CanvasCache {
-  private readonly map = new Map<number, HTMLCanvasElement>();
+  private readonly map = new Map<string, HTMLCanvasElement>();
 
-  get(pageNumber: number): HTMLCanvasElement | undefined {
-    return this.map.get(pageNumber);
+  get(key: string): HTMLCanvasElement | undefined {
+    return this.map.get(key);
   }
 
-  set(pageNumber: number, canvas: HTMLCanvasElement): void {
-    if (this.map.has(pageNumber)) this.map.delete(pageNumber);
-    this.map.set(pageNumber, canvas);
+  set(key: string, canvas: HTMLCanvasElement): void {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, canvas);
     while (this.map.size > CANVAS_CACHE_LIMIT) {
       const oldest = this.map.keys().next();
       if (oldest.done) break;
@@ -94,6 +107,8 @@ export function PdfViewer({
   maxPixelRatio = 2,
   maxCanvasPixels = 16_777_216,
   maxCanvasDimension = 8192,
+  zoomable = true,
+  doubleTapZoom = 2,
   className,
   style,
   onLoad,
@@ -120,6 +135,12 @@ export function PdfViewer({
   const [containerWidth, setContainerWidth] = useState(0);
   const [visiblePages, setVisiblePages] = useState<ReadonlySet<number>>(() => new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  /** 缩放倍率：1 = 按宽度适配 */
+  const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  /** 缩放后待恢复的滚动位置（等布局生效后再应用） */
+  const pendingScrollRef = useRef<{ left: number; top: number } | null>(null);
 
   const cacheRef = useRef(new CanvasCache());
 
@@ -209,12 +230,95 @@ export function PdfViewer({
   }, [src]);
 
   // ---------------- 布局 ----------------
+  // 缩放靠「放大布局宽度」实现，而不是 CSS transform：
+  // 这样画布会按新尺寸重新渲染，放大后依然清晰（transform 只会把位图拉伸发虚）。
+  const layoutWidth = containerWidth > 0 ? containerWidth * zoom : 0;
   const layout = useMemo(
-    () => computeLayout({ sizes, containerWidth, gap, padding }),
-    [sizes, containerWidth, gap, padding],
+    () => computeLayout({ sizes, containerWidth: layoutWidth, gap, padding }),
+    [sizes, layoutWidth, gap, padding],
   );
 
   const total = doc?.numPages ?? 0;
+
+  // ---------------- 双击缩放 ----------------
+  const toggleZoom = useCallback(
+    (clientX: number, clientY: number) => {
+      const root = scrollEl;
+      if (!root || !zoomable) return;
+      const rect = root.getBoundingClientRect();
+      const offsetX = clientX - rect.left;
+      const offsetY = clientY - rect.top;
+      const current = zoomRef.current;
+      const next = current > 1 ? 1 : Math.max(1.01, doubleTapZoom);
+      const ratio = next / current;
+
+      // 等布局按新宽度渲染完再恢复滚动，否则滚动范围还是旧的
+      pendingScrollRef.current = {
+        left: anchoredScroll(root.scrollLeft, offsetX, ratio),
+        top: anchoredScroll(root.scrollTop, offsetY, ratio),
+      };
+      setZoom(next);
+    },
+    [scrollEl, zoomable, doubleTapZoom],
+  );
+
+  useEffect(() => {
+    const root = scrollEl;
+    const pending = pendingScrollRef.current;
+    if (!root || !pending) return;
+    pendingScrollRef.current = null;
+    root.scrollLeft = pending.left;
+    root.scrollTop = pending.top;
+  }, [scrollEl, zoom, layout.contentHeight]);
+
+  // 手动检测双击：不依赖 dblclick（移动端在可滚动容器里常不触发）
+  useEffect(() => {
+    const root = scrollEl;
+    if (!root || !zoomable) return;
+
+    let down: { x: number; y: number } | null = null;
+    let lastTap = { time: 0, x: 0, y: 0 };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      down = { x: event.clientX, y: event.clientY };
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      const start = down;
+      down = null;
+      if (!start) return;
+      // 拖动不算点击
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > TAP_SLOP) return;
+
+      const now = Date.now();
+      const near = Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE;
+      if (now - lastTap.time < DOUBLE_TAP_DELAY && near) {
+        lastTap = { time: 0, x: 0, y: 0 };
+        toggleZoom(event.clientX, event.clientY);
+        return;
+      }
+      lastTap = { time: now, x: event.clientX, y: event.clientY };
+    };
+
+    const onPointerCancel = () => {
+      down = null;
+    };
+
+    root.addEventListener('pointerdown', onPointerDown, { passive: true });
+    root.addEventListener('pointerup', onPointerUp, { passive: true });
+    root.addEventListener('pointercancel', onPointerCancel, { passive: true });
+    return () => {
+      root.removeEventListener('pointerdown', onPointerDown);
+      root.removeEventListener('pointerup', onPointerUp);
+      root.removeEventListener('pointercancel', onPointerCancel);
+    };
+  }, [scrollEl, zoomable, toggleZoom]);
+
+  // 换文档时回到 1 倍
+  useEffect(() => {
+    setZoom(1);
+  }, [src]);
 
   // ---------------- 可见页检测 ----------------
   useEffect(() => {
@@ -281,9 +385,15 @@ export function PdfViewer({
   const measured = containerWidth > 0;
 
   return (
-    <div ref={setScrollNode} className={`pdfv-root ${className ?? ''}`} style={style}>
+    <div
+      ref={setScrollNode}
+      className={`pdfv-root ${className ?? ''}`}
+      // 放大后需要横向滚动才能看到页面两侧
+      style={{ ...style, overflowX: zoom > 1 ? 'auto' : 'hidden' }}
+      data-zoom={zoom > 1 ? String(zoom) : undefined}
+    >
       {measured ? (
-        <div className="pdfv-content" style={{ height: layout.contentHeight }}>
+        <div className="pdfv-content" style={{ width: layoutWidth, height: layout.contentHeight }}>
           {layout.boxes.map((box) => (
             <PageView
               key={box.pageNumber}
@@ -332,7 +442,9 @@ function PageView({ doc, box, active, maxPixelRatio, maxCanvasPixels, maxCanvasD
     setFailed(false);
     if (!active) return;
 
-    const cached = cache.get(box.pageNumber);
+    // 缓存 key 带上显示宽度，缩放后不会误用旧分辨率的位图
+    const cacheKey = `${box.pageNumber}@${Math.round(box.displayWidth)}`;
+    const cached = cache.get(cacheKey);
     if (cached) {
       mount(holder, cached);
       return;
@@ -370,7 +482,7 @@ function PageView({ doc, box, active, maxPixelRatio, maxCanvasPixels, maxCanvasD
           canvas.height = 0;
           return;
         }
-        cache.set(box.pageNumber, canvas);
+        cache.set(cacheKey, canvas);
         mount(holder, canvas);
       } catch (err) {
         if (cancelled) return;

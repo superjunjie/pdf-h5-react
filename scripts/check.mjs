@@ -123,7 +123,70 @@ const overflow = await page.evaluate(() => {
 });
 check('无横向滚动条', overflow.scrollWidth <= overflow.clientWidth + 1, `${overflow.scrollWidth} / ${overflow.clientWidth}`);
 
-// 7. 无运行时错误
+// 7. 双击放大
+await page.evaluate(() => {
+  const root = document.querySelector('.pdfv-root');
+  root.scrollTop = 0;
+});
+await new Promise((r) => setTimeout(r, 800));
+
+const beforeZoom = await page.evaluate(() => ({
+  zoom: window.__pdfv.zoom(),
+  canvasPx: (() => {
+    const c = document.querySelector('.pdfv-page canvas');
+    return c ? c.width : 0;
+  })(),
+}));
+
+// 在页面中部双击（两次快速点击，间隔 < 300ms）
+const box = await page.evaluate(() => {
+  const root = document.querySelector('.pdfv-root');
+  const r = root.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + 200 };
+});
+await page.mouse.click(box.x, box.y);
+await new Promise((r) => setTimeout(r, 80));
+await page.mouse.click(box.x, box.y);
+await new Promise((r) => setTimeout(r, 2000));
+
+const afterZoom = await page.evaluate(() => {
+  const root = document.querySelector('.pdfv-root');
+  const canvas = document.querySelector('.pdfv-page canvas');
+  return {
+    zoom: window.__pdfv.zoom(),
+    canvasPx: canvas ? canvas.width : 0,
+    canvasCss: canvas ? Math.round(canvas.getBoundingClientRect().width) : 0,
+    scrollWidth: root.scrollWidth,
+    clientWidth: root.clientWidth,
+  };
+});
+
+check('双击放大生效', afterZoom.zoom >= 1.9, `zoom ${beforeZoom.zoom} → ${afterZoom.zoom}`);
+check(
+  '放大后画布重新渲染（像素变多，不是拉伸）',
+  afterZoom.canvasPx > beforeZoom.canvasPx,
+  `${beforeZoom.canvasPx}px → ${afterZoom.canvasPx}px`,
+);
+check(
+  '放大后出现横向滚动（可看页面两侧）',
+  afterZoom.scrollWidth > afterZoom.clientWidth + 1,
+  `${afterZoom.scrollWidth} / ${afterZoom.clientWidth}`,
+);
+
+// 再双击一次应回到 1 倍
+await page.mouse.click(box.x, box.y);
+await new Promise((r) => setTimeout(r, 80));
+await page.mouse.click(box.x, box.y);
+await new Promise((r) => setTimeout(r, 1500));
+
+const restored = await page.evaluate(() => {
+  const root = document.querySelector('.pdfv-root');
+  return { zoom: window.__pdfv.zoom(), scrollWidth: root.scrollWidth, clientWidth: root.clientWidth };
+});
+check('再次双击恢复 1 倍', restored.zoom <= 1.05, `zoom ${restored.zoom}`);
+check('恢复后横向滚动消失', restored.scrollWidth <= restored.clientWidth + 1, `${restored.scrollWidth} / ${restored.clientWidth}`);
+
+// 8. 无运行时错误
 const realErrors = errors.filter((t) => !/favicon|DevTools|preload|deprecated/i.test(t));
 check('无运行时错误', realErrors.length === 0, realErrors.slice(0, 2).join(' | ') || '无');
 

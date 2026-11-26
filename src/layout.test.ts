@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  anchoredScroll,
   clampCanvasSize,
   computeLayout,
   pageAtOffset,
@@ -118,6 +119,34 @@ describe('viewportScaleFor（防止文字截断的关键不变式）', () => {
   it('异常参数不产生 NaN', () => {
     expect(Number.isFinite(viewportScaleFor(0, A4.width, 2))).toBe(true);
     expect(Number.isFinite(viewportScaleFor(366, 0, 2))).toBe(true);
+  });
+});
+
+describe('anchoredScroll（双击放大时保持锚点不动）', () => {
+  it('放大：锚点内容坐标按比例放大', () => {
+    // 距视口左 100px，当前 scrollLeft 50 → 内容坐标 150
+    // 放大 2 倍后该点应在 300，减去视口内偏移 100 → 200
+    expect(anchoredScroll(50, 100, 2)).toBe(200);
+  });
+
+  it('缩小回 1 倍：内容坐标按比例还原', () => {
+    // 放大状态下 scrollLeft 200、偏移 100 → 内容坐标 300
+    // 缩回一半 → 150，减去 100 → 50
+    expect(anchoredScroll(200, 100, 0.5)).toBe(50);
+  });
+
+  it('顶部锚点不会产生负滚动', () => {
+    expect(anchoredScroll(0, 0, 2)).toBe(0);
+    expect(anchoredScroll(0, 10, 0.5)).toBe(0);
+  });
+
+  it('比例 1 时滚动位置不变', () => {
+    expect(anchoredScroll(123, 45, 1)).toBe(123);
+  });
+
+  it('异常输入返回 0', () => {
+    expect(anchoredScroll(Number.NaN, 10, 2)).toBe(0);
+    expect(anchoredScroll(10, 10, Number.NaN)).toBe(0);
   });
 });
 

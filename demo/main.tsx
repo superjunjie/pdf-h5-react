@@ -57,6 +57,13 @@ function App() {
       total: () => total,
       status: () => statusRef.current,
       fps: () => fps,
+      // 缩放状态从 DOM 读取，避免再引入回调
+      zoom: () => {
+        const root = document.querySelector('.pdfv-root');
+        const content = document.querySelector('.pdfv-content');
+        if (!root || !content) return null;
+        return +(content.getBoundingClientRect().width / root.clientWidth).toFixed(2);
+      },
     };
   }, [page, total, fps]);
 
@@ -120,6 +127,7 @@ function App() {
         <span className="demo-chip">
           FPS <strong>{fps ?? '—'}</strong>
         </span>
+        <span className="demo-chip">双击可放大</span>
       </footer>
     </div>
   );
