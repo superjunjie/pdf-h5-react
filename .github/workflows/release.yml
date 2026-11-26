@@ -38,8 +38,7 @@ jobs:
     name: Build & Publish (OIDC)
     runs-on: ubuntu-latest
     permissions:
-      # contents: write 仅用于把发布日志推到 ci-debug 分支便于排查
-      contents: write
+      contents: read
       # 关键：id-token: write 让 Actions 能签发 OIDC token，npm 靠它做身份校验
       id-token: write
     steps:
@@ -147,12 +146,24 @@ jobs:
           curl -s -o /dev/null -w 'registry 上 %{http_code}\n' "https://registry.npmjs.org/$(node -p "require('./package.json').name")/$(node -p "require('./package.json').version")"
           echo "=================================="
 
-          # 把完整输出写到文件，并在失败时上传为 artifact（页面日志拿不到时的兜底）
+          # 把完整输出写到文件，失败时上传为 artifact 并写进 Step Summary
           set +e
           npm publish --registry=https://registry.npmjs.org --access public > /tmp/npm-publish.log 2>&1
           STATUS=$?
           set -e
           cat /tmp/npm-publish.log
+
+          # 幂等：版本已存在视为成功。
+          # 重跑同 tag（或上次发布成功但后续校验超时）时 npm 会报
+          # "You cannot publish over the previously published versions"，
+          # 这不是错误 —— 版本已经上线，直接放行让校验步骤去确认。
+          if [ "$STATUS" -ne 0 ]; then
+            if grep -q 'previously published versions' /tmp/npm-publish.log; then
+              echo "::notice::该版本此前已发布，跳过重复发布"
+              STATUS=0
+            fi
+          fi
+
           if [ "$STATUS" -ne 0 ]; then
             {
               echo "### npm publish 失败（退出码 $STATUS）"
@@ -174,51 +185,30 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # 把发布日志推到 ci-debug 分支：运行日志需要鉴权才能看，
-      # 而分支可以公开读取，便于在没有仓库凭据的情况下排查「发了但没上线」。
-      - name: Publish log to ci-debug branch
-        if: always()
-        run: |
-          if [ ! -f /tmp/npm-publish.log ]; then
-            echo "没有日志文件，跳过"
-            exit 0
-          fi
-          # commit-tree 需要作者身份；checkout 默认不配置
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          {
-            echo "run: $GITHUB_RUN_ID"
-            echo "ref: $GITHUB_REF"
-            echo "sha: $GITHUB_SHA"
-            echo "npm: $(npm --version) / node: $(node --version)"
-            echo "version: $(node -p "require('./package.json').version")"
-            echo "----- npm config -----"
-            npm config list 2>&1 | grep -v '_authToken' || true
-            echo "----- npm publish output -----"
-            cat /tmp/npm-publish.log
-          } > /tmp/ci-debug.log
-          BLOB="$(git hash-object -w /tmp/ci-debug.log)"
-          TREE="$(printf '100644 blob %s\tnpm-publish.log\n' "$BLOB" | git mktree)"
-          COMMIT="$(git commit-tree "$TREE" -m "ci publish log $GITHUB_RUN_ID")"
-          git push -f origin "$COMMIT:refs/heads/ci-debug"
-
       # 发布后校验：确认 registry 上真的存在这个版本，避免「命令成功但没发出去」
+      #
+      # 窗口给到 ~8 分钟：实测 npmjs 的 CDN 传播有时要 3 分钟以上，
+      # 之前只等 60 秒得出过一次假失败（版本其实已发布）。
       - name: Verify published to registry
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          echo "校验 https://registry.npmjs.org/pdf-h5-react/$VERSION"
-          for i in $(seq 1 12); do
-            CODE="$(curl -s -o /dev/null -w '%{http_code}' -H 'Cache-Control: no-cache' "https://registry.npmjs.org/pdf-h5-react/$VERSION")"
+          PKG="$(node -p "require('./package.json').name")"
+          echo "校验 https://registry.npmjs.org/$PKG/$VERSION"
+          for i in $(seq 1 32); do
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' -H 'Cache-Control: no-cache' "https://registry.npmjs.org/$PKG/$VERSION?t=$(date +%s)")"
             echo "  尝试 $i: HTTP $CODE"
             if [ "$CODE" = "200" ]; then
               echo "✓ registry 上已存在 $VERSION"
+              DIST_TAG="$(curl -s "https://registry.npmjs.org/$PKG" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s)['dist-tags'].latest)}catch{console.log('?')}})")"
+              echo "  dist-tags.latest = $DIST_TAG"
               exit 0
             fi
-            sleep 5
+            sleep 15
           done
-          echo "::error::发布命令执行成功，但 registry 上查不到 $VERSION —— 请检查 npm 输出"
+          echo "::error::发布命令执行成功，但 8 分钟内 registry 上仍查不到 $VERSION —— 请检查 npm 输出"
           exit 1
 
+      # 发布后校验：确认 registry 上真的存在这个版本，避免「命令成功但没发出去」
       - name: Summary
         run: |
           VERSION="$(node -p "require('./package.json').version")"
