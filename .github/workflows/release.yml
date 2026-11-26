@@ -38,7 +38,8 @@ jobs:
     name: Build & Publish (OIDC)
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # contents: write 仅用于把发布日志推到 ci-debug 分支便于排查
+      contents: write
       # 关键：id-token: write 让 Actions 能签发 OIDC token，npm 靠它做身份校验
       id-token: write
     steps:
@@ -172,6 +173,29 @@ jobs:
           path: /tmp/npm-publish.log
           if-no-files-found: ignore
           retention-days: 7
+
+      # 把发布日志推到 ci-debug 分支：运行日志需要鉴权才能看，
+      # 而分支可以公开读取，便于在没有仓库凭据的情况下排查「发了但没上线」。
+      - name: Publish log to ci-debug branch
+        if: always()
+        run: |
+          if [ ! -f /tmp/npm-publish.log ]; then
+            echo "没有日志文件，跳过"
+            exit 0
+          fi
+          {
+            echo "run: $GITHUB_RUN_ID"
+            echo "ref: $GITHUB_REF"
+            echo "sha: $GITHUB_SHA"
+            echo "npm: $(npm --version) / node: $(node --version)"
+            echo "version: $(node -p "require('./package.json').version")"
+            echo "----- npm publish output -----"
+            cat /tmp/npm-publish.log
+          } > /tmp/ci-debug.log
+          BLOB="$(git hash-object -w /tmp/ci-debug.log)"
+          TREE="$(printf '100644 blob %s\tnpm-publish.log\n' "$BLOB" | git mktree)"
+          COMMIT="$(git commit-tree "$TREE" -m "ci publish log $GITHUB_RUN_ID")"
+          git push -f origin "$COMMIT:refs/heads/ci-debug"
 
       # 发布后校验：确认 registry 上真的存在这个版本，避免「命令成功但没发出去」
       - name: Verify published to registry
