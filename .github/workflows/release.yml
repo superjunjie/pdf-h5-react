@@ -183,12 +183,17 @@ jobs:
             echo "没有日志文件，跳过"
             exit 0
           fi
+          # commit-tree 需要作者身份；checkout 默认不配置
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           {
             echo "run: $GITHUB_RUN_ID"
             echo "ref: $GITHUB_REF"
             echo "sha: $GITHUB_SHA"
             echo "npm: $(npm --version) / node: $(node --version)"
             echo "version: $(node -p "require('./package.json').version")"
+            echo "----- npm config -----"
+            npm config list 2>&1 | grep -v '_authToken' || true
             echo "----- npm publish output -----"
             cat /tmp/npm-publish.log
           } > /tmp/ci-debug.log
