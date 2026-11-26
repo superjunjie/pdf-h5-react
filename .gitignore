@@ -22,3 +22,8 @@ Thumbs.db
 
 # verify 脚本的输出目录（截图与报告，非交付物）
 screenshots/
+
+# 调试产物
+debug-*.png
+debug-*.mjs
+*.tgz

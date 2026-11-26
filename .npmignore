@@ -1,6 +1,5 @@
-# 说明：package.json 的 "files" 白名单优先级高于 .npmignore，
+# package.json 的 "files" 白名单优先级高于 .npmignore，
 # 因此这里只做「白名单之外」的补充排除。
-# 测试产生的空 .d.ts 由 scripts/clean-dist.mjs 在构建后清理。
 
 # 开发配置
 tsconfig.json
@@ -13,11 +12,10 @@ vite.lib.config.ts
 demo/
 public/
 docs/
-screenshots/
 dist-demo/
 index.html
 
-# 工具脚本：只发布使用者需要的 copy-pdfjs-assets.mjs
-scripts/verify.mjs
-scripts/make-samples.mjs
-scripts/capture.mjs
+# 辅助脚本：只发布使用者需要的 copy-pdfjs-assets.mjs
+scripts/check.mjs
+scripts/publish-gh.mjs
+scripts/clean-dist.mjs

@@ -1,0 +1,90 @@
+/* 极简 PDF 阅读器样式：只有滚动容器、页面定位与状态提示 */
+
+.pdfv-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: #f2f3f5;
+}
+
+.pdfv-content {
+  position: relative;
+  width: 100%;
+}
+
+.pdfv-page {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
+  overflow: hidden;
+}
+
+.pdfv-canvas {
+  width: 100%;
+  height: 100%;
+  background: #fff;
+}
+
+.pdfv-canvas canvas {
+  display: block;
+}
+
+.pdfv-page-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8a9099;
+  font-size: 12px;
+}
+
+.pdfv-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-height: 120px;
+  padding: 24px;
+  box-sizing: border-box;
+  background: #f2f3f5;
+  color: #646a73;
+  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  text-align: center;
+}
+
+.pdfv-status-error {
+  color: #d14343;
+}
+
+.pdfv-detail {
+  max-width: 320px;
+  margin: 0;
+  color: #646a73;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+@media (prefers-color-scheme: dark) {
+  .pdfv-root,
+  .pdfv-status {
+    background: #14161a;
+  }
+  .pdfv-page,
+  .pdfv-canvas {
+    background: #1e2126;
+  }
+  .pdfv-status {
+    color: #9aa0a6;
+  }
+}
